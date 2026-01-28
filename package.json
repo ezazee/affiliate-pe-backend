@@ -14,7 +14,7 @@
     "dependencies": {
         "@getbrevo/brevo": "^3.0.1",
         "@types/multer": "^2.0.0",
-        "@types/uuid": "^10.0.0",
+        "@types/uuid": "^9.0.8",
         "@types/web-push": "^3.6.4",
         "@vercel/blob": "^2.0.1",
         "bcryptjs": "^3.0.3",
@@ -26,7 +26,7 @@
         "node-fetch": "^3.3.2",
         "swagger-jsdoc": "^6.2.8",
         "swagger-ui-express": "^5.0.1",
-        "uuid": "^13.0.0",
+        "uuid": "^9.0.1",
         "web-push": "^3.6.7"
     },
     "devDependencies": {
