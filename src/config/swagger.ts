@@ -1,4 +1,5 @@
 import swaggerJsdoc from 'swagger-jsdoc';
+import path from 'path';
 
 const options: swaggerJsdoc.Options = {
     definition: {
@@ -33,7 +34,14 @@ const options: swaggerJsdoc.Options = {
             },
         ],
     },
-    apis: ['./src/routes/*.ts', './src/routes/**/*.ts'], // Path to the API docs
+    // Look for both TS (dev) and JS (prod) files
+    // Use path.join to handle relative paths correctly in different environments
+    apis: [
+        path.join(__dirname, '../routes/*.ts'),
+        path.join(__dirname, '../routes/*.js'),
+        path.join(__dirname, '../routes/**/*.ts'),
+        path.join(__dirname, '../routes/**/*.js')
+    ],
 };
 
 export const specs = swaggerJsdoc(options);
