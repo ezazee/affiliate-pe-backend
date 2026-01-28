@@ -9,7 +9,12 @@ const options: swaggerJsdoc.Options = {
             version: '1.0.0',
             description: 'Dokumentasi API untuk platform afiliasi PE Skinpro. API ini menangani autentikasi, manajemen produk, pesanan, dan komisi.',
         },
-        servers: [], // Removed as requested, will default to current host
+        servers: [
+            {
+                url: '/api',
+                description: 'API Server',
+            }
+        ],
         components: {
             securitySchemes: {
                 basicAuth: {
