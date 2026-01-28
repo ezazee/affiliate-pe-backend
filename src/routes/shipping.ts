@@ -2,7 +2,7 @@ import express from 'express';
 import clientPromise from '../config/database';
 
 const router = express.Router();
-const MAPBOX_API_KEY = process.env.MAPBOX_ACCESS_TOKEN;
+const MAPBOX_API_KEY = process.env.MAPBOX_ACCESS_TOKEN || process.env.NEXT_PUBLIC_MAPBOX_API_KEY;
 
 // A simple function to calculate shipping cost based on distance tiers
 const calculateCost = (distanceInKm: number, rates: any): { cost: number; rateApplied: number; policyDescription: string } => {
