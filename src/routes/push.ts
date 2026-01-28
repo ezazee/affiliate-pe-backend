@@ -1,19 +1,24 @@
 import express from 'express';
 import clientPromise from '../config/database';
+import { authenticateUser } from '../middleware/auth';
 
 const router = express.Router();
+
 /**
  * @swagger
  * tags:
  *   name: Push
  *   description: Push notification endpoints
  */
+
 /**
  * @swagger
  * /push/subscribe:
  *   post:
  *     summary: Subscribe to push notifications
  *     tags: [Push]
+ *     security:
+ *       - bearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
@@ -31,10 +36,10 @@ const router = express.Router();
  *       200:
  *         description: Subscribed successfully
  */
-router.post('/subscribe', async (req, res) => {
+router.post('/subscribe', authenticateUser, async (req, res) => {
     try {
         const subscription = req.body;
-        const user = req.user; // Added by auth middleware
+        const user = (req as any).user; // Added by auth middleware
 
         if (!subscription.endpoint || !subscription.keys) {
             return res.status(400).json({ error: 'Invalid subscription data' });
@@ -65,10 +70,10 @@ router.post('/subscribe', async (req, res) => {
     }
 });
 
-router.delete('/unsubscribe', async (req, res) => {
+router.post('/unsubscribe', authenticateUser, async (req, res) => {
     try {
-        // const { endpoint } = req.body; // Unused in original logic actually, it just unsets for the user
-        const user = req.user;
+        // const { endpoint } = req.body; // Unused in original logic
+        const user = (req as any).user;
 
         if (!user) {
             return res.status(401).json({ error: 'Authentication required' });

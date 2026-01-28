@@ -39,7 +39,7 @@ interface NotificationTarget {
 async function saveInAppNotification(
     data: NotificationData,
     target: NotificationTarget
-) {
+): Promise<{ [email: string]: string } | null> {
     try {
         const client = await clientPromise;
         const db = client.db();
@@ -79,19 +79,32 @@ async function saveInAppNotification(
                 target: undefined // Remove generic target
             }));
 
-            await notificationsCollection.insertMany(notifications);
+            const result = await notificationsCollection.insertMany(notifications);
+
+            // Create map of Email -> Notification ID
+            const emailMap: { [email: string]: string } = {};
+            Object.values(result.insertedIds).forEach((id, index) => {
+                if (notifications[index]) {
+                    emailMap[notifications[index].userEmail] = id.toString();
+                }
+            });
+
+            return emailMap;
         }
+        return null;
 
     } catch (error) {
         // Silent error
         console.error('Error saving in-app notification:', error);
+        return null; // Return null on error so flow continues
     }
 }
 
 // Internal function to send the actual push notification
 async function sendPushNotification(
     data: NotificationData,
-    target?: NotificationTarget
+    target?: NotificationTarget,
+    userNotificationMap?: { [email: string]: string } // Map email to notification _id
 ): Promise<{ success: boolean; sent: number; failed: number; message: string }> {
     try {
         const client = await clientPromise;
@@ -131,19 +144,29 @@ async function sendPushNotification(
             };
         }
 
-        const payload = JSON.stringify({
+        // We prepare the base payload options
+        const basePayload = {
             title: data.title,
             body: data.body,
             url: data.url,
             icon: data.icon || '/favicon/android-chrome-192x192.png',
             badge: data.badge || '/favicon/favicon-32x32.png',
-        });
+        };
 
         const sendPromises = users.map(async (user) => {
             try {
                 if (!user.pushSubscription) return { success: false, userId: user.email, error: 'No subscription' };
 
-                await webpush.sendNotification(user.pushSubscription as any, payload);
+                // Customize payload with notification ID if available
+                const userPayload = {
+                    ...basePayload,
+                    data: {
+                        id: userNotificationMap ? userNotificationMap[user.email] : undefined,
+                        url: data.url
+                    }
+                };
+
+                await webpush.sendNotification(user.pushSubscription as any, JSON.stringify(userPayload));
                 return { success: true, userId: user.email };
             } catch (error: any) {
                 console.error(`❌ Failed to send to ${user.email}:`, error.message);
@@ -260,13 +283,14 @@ export async function sendTemplateNotification(
     if (template.category === 'withdrawal') type = 'warning';
     if (templateId === 'withdrawal_rejected') type = 'error';
 
-    // 1. Save In-App Notification
-    await saveInAppNotification({ title, body, url, type }, target);
+    // 1. Save In-App Notification and get ID Mapping
+    const userNotificationMap = await saveInAppNotification({ title, body, url, type }, target);
 
-    // 2. Send Push Notification
+    // 2. Send Push Notification with IDs
     return sendPushNotification(
         { title, body, url, type },
-        target
+        target,
+        userNotificationMap || {}
     );
 }
 
