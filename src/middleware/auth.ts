@@ -1,4 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
+import clientPromise from '../config/database';
+import { Security } from '../lib/security';
 
 // Extend Express Request type to include user
 declare global {
@@ -22,6 +24,32 @@ export async function authenticateUser(req: Request, res: Response, next: NextFu
         if (authHeader?.startsWith('Bearer ')) {
             const token = authHeader.substring(7);
             sessionData = JSON.parse(Buffer.from(token, 'base64').toString());
+        } else if (authHeader?.startsWith('Basic ')) {
+            // Handle Basic Auth (Email:Password) for Swagger
+            const credentials = Buffer.from(authHeader.substring(6), 'base64').toString().split(':');
+            const email = credentials[0];
+            const password = credentials[1];
+
+            if (email && password) {
+                const client = await clientPromise;
+                const db = client.db();
+                const user = await db.collection('users').findOne({ email });
+
+                if (user) {
+                    let isValid = false;
+                    // Check password (Hash or Plain)
+                    if (user.password && (user.password.startsWith('$2a$') || user.password.startsWith('$2b$'))) {
+                        isValid = await Security.comparePassword(password, user.password);
+                    } else if (user.password === password) {
+                        isValid = true;
+                    }
+
+                    if (isValid) {
+                        req.user = { email: user.email, userId: user._id.toString() };
+                        return next();
+                    }
+                }
+            }
         } else if (req.headers.cookie && req.headers.cookie.includes('affiliate_user_session')) {
             // Simple cookie parsing
             const cookies = req.headers.cookie.split(';').reduce((acc, cookie) => {
@@ -53,9 +81,7 @@ export async function authenticateUser(req: Request, res: Response, next: NextFu
             return next();
         }
 
-        // If we want to enforce auth, we'd return 401. But the original utils returned null.
-        // We'll set req.user to undefined and let the route decide (or we can make an requireAuth middleware).
-        // For now, let's just proceed.
+        // Proceed without user if auth failed (routes can check req.user)
         next();
     } catch (error) {
         console.error('Error in auth middleware:', error);

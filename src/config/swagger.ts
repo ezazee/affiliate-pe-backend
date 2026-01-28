@@ -9,28 +9,18 @@ const options: swaggerJsdoc.Options = {
             version: '1.0.0',
             description: 'Dokumentasi API untuk platform afiliasi PE Skinpro. API ini menangani autentikasi, manajemen produk, pesanan, dan komisi.',
         },
-        servers: [
-            {
-                url: 'https://affiliate-pe-backend.vercel.app/api',
-                description: 'Production Server',
-            },
-            {
-                url: 'http://localhost:3001/api',
-                description: 'Development Server',
-            },
-        ],
+        servers: [], // Removed as requested, will default to current host
         components: {
             securitySchemes: {
-                bearerAuth: {
+                basicAuth: {
                     type: 'http',
-                    scheme: 'bearer',
-                    bearerFormat: 'JWT',
+                    scheme: 'basic',
                 },
             },
         },
         security: [
             {
-                bearerAuth: [],
+                basicAuth: [],
             },
         ],
     },
