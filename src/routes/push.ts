@@ -41,18 +41,23 @@ router.post('/subscribe', authenticateUser, async (req, res) => {
         const subscription = req.body;
         const user = (req as any).user; // Added by auth middleware
 
+        console.log(`[PUSH] Subscribe request for user: ${user?.email}`);
+        console.log(`[PUSH] Subscription payload:`, JSON.stringify(subscription).substring(0, 100) + '...');
+
         if (!subscription.endpoint || !subscription.keys) {
+            console.warn('[PUSH] Invalid subscription data missing endpoint or keys');
             return res.status(400).json({ error: 'Invalid subscription data' });
         }
 
         if (!user) {
+            console.warn('[PUSH] Authentication failed for subscription');
             return res.status(401).json({ error: 'Authentication required' });
         }
 
         const client = await clientPromise;
         const db = client.db();
 
-        await db.collection('users').updateOne(
+        const updateResult = await db.collection('users').updateOne(
             { email: user.email },
             {
                 $set: {
@@ -62,6 +67,8 @@ router.post('/subscribe', authenticateUser, async (req, res) => {
                 }
             }
         );
+
+        console.log(`[PUSH] Subscription updated for ${user.email}. Modified count: ${updateResult.modifiedCount}`);
 
         return res.json({ success: true, message: 'Subscribed' });
     } catch (error) {
