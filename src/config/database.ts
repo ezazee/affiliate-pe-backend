@@ -10,7 +10,7 @@ const options = {
     connectTimeoutMS: 10000,
     retryWrites: true,
     retryReads: true,
-    family: 4, // Force IPv4
+
 };
 
 if (!uri) {
