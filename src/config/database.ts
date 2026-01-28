@@ -24,6 +24,10 @@ let clientPromise: Promise<MongoClient>;
 if (!uri) {
     clientPromise = Promise.reject(new Error('MONGODB_URI not defined'));
 } else {
+    // Debug Logging for Vercel
+    const maskedUri = uri.replace(/:([^:@]+)@/, ':****@');
+    console.log(`[MongoDB] Attempting connection to: ${maskedUri}`);
+
     // In standard Node.js (non-serverless/non-Next.js HMR), we can just create the client.
     // However, if we want to share the connection logic, we can keep the singleton pattern.
     if (process.env.NODE_ENV === 'development') {
