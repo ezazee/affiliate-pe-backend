@@ -106,5 +106,10 @@ app.get('/health', (req, res) => {
 
 // Start server
 app.listen(port, () => {
+    console.log(`Server running on port ${port}`);
 
+    // Log database connection info for debugging
+    const dbUri = process.env.MONGODB_URI || 'undefined';
+    const maskedUri = dbUri.replace(/:([^:@]+)@/, ':****@');
+    console.log(`Connecting to MongoDB: ${maskedUri}`);
 });
