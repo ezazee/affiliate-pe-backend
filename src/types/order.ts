@@ -13,6 +13,7 @@ export interface Order {
     buyerName: string;
     buyerPhone: string;
     shippingAddress: string;
+    district?: string;
     city: string;
     province: string;
     postalCode: string;

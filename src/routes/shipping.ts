@@ -55,8 +55,8 @@ router.post('/', async (req, res) => {
     }
 
     try {
-        const { shippingAddress, city, province, postalCode } = req.body;
-        const fullAddress = `${shippingAddress}, ${city}, ${province}, ${postalCode}`;
+        const { shippingAddress, district, city, province, postalCode } = req.body;
+        const fullAddress = `${shippingAddress}, ${district}, ${city}, ${province}, ${postalCode}`;
 
         // Fetch settings
         const client = await clientPromise;

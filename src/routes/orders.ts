@@ -58,6 +58,8 @@ const generateOrderNumber = async (db: any): Promise<string> => {
  *                 type: string
  *               shippingAddress:
  *                 type: string
+ *               district:
+ *                 type: string
  *               city:
  *                 type: string
  *               province:
@@ -90,6 +92,7 @@ router.post('/', async (req, res) => {
             buyerName,
             buyerPhone,
             shippingAddress,
+            district,
             city,
             province,
             postalCode,
@@ -103,7 +106,7 @@ router.post('/', async (req, res) => {
         } = req.body;
 
         if (
-            !buyerName || !buyerPhone || !shippingAddress || !city || !province || !postalCode ||
+            !buyerName || !buyerPhone || !shippingAddress || !district || !city || !province || !postalCode ||
             !productId || !affiliatorId || !affiliateCode || !affiliateName ||
             shippingCost === undefined || totalPrice === undefined
         ) {
@@ -128,6 +131,7 @@ router.post('/', async (req, res) => {
             buyerName,
             buyerPhone,
             shippingAddress,
+            district,
             city,
             province,
             postalCode,
