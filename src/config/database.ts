@@ -37,12 +37,21 @@ if (!uri) {
 
         if (!globalWithMongo._mongoClientPromise) {
             client = new MongoClient(uri, options);
-            globalWithMongo._mongoClientPromise = client.connect();
+            globalWithMongo._mongoClientPromise = client.connect().catch(err => {
+                console.error('[MongoDB] Develop Connection Failed:', err);
+                // Return null or throw handled error to route
+                // casting to any to satisfy strict type temporarily while allowing app to boot
+                return null as unknown as MongoClient;
+            });
         }
         clientPromise = globalWithMongo._mongoClientPromise;
     } else {
         client = new MongoClient(uri, options);
-        clientPromise = client.connect();
+        clientPromise = client.connect().catch(err => {
+            console.error('[MongoDB] Production Connection Failed:', err);
+            // Return null so routes fail gracefully inside try/catch instead of crashing process
+            return null as unknown as MongoClient;
+        });
     }
 }
 
