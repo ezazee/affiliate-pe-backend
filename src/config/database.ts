@@ -40,8 +40,11 @@ if (!uri) {
             client = new MongoClient(uri, options);
             globalWithMongo._mongoClientPromise = client.connect().catch(err => {
                 console.error('[MongoDB] Develop Connection Failed:', err);
-                // Return null or throw handled error to route
-                // casting to any to satisfy strict type temporarily while allowing app to boot
+                // Force exit in development so nodemon restarts the process, effectively retrying the connection
+                if (process.env.NODE_ENV === 'development') {
+                    console.log('[MongoDB] Exiting process to trigger nodemon restart...');
+                    process.exit(1);
+                }
                 return null as unknown as MongoClient;
             });
         }
