@@ -100,4 +100,41 @@ router.post('/unsubscribe', authenticateUser, async (req, res) => {
     }
 });
 
+// Import the service
+const { sendNotification } = require('../services/notification-service');
+
+router.post('/send', authenticateUser, async (req, res) => {
+    try {
+        const { title, body, url } = req.body;
+        const user = (req as any).user;
+
+        if (!user) {
+            return res.status(401).json({ error: 'Authentication required' });
+        }
+
+        // Send checking only the current user
+        // We can manually call the internal logic or use the service if it exposes a direct "send to user" method.
+        // The service 'sendNotification' takes (data, target).
+
+        const result = await sendNotification(
+            {
+                title: title || 'Test Notification',
+                body: body || 'Test body',
+                url: url || '/'
+            },
+            { userEmail: user.email }
+        );
+
+        return res.json({
+            success: result.success,
+            sent: result.sent,
+            message: result.message
+        });
+
+    } catch (error: any) {
+        console.error('Test notification error:', error);
+        return res.status(500).json({ error: 'Failed to send test notification', details: error.message });
+    }
+});
+
 export default router;
