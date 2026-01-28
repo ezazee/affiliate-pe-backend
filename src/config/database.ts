@@ -5,9 +5,9 @@ dotenv.config(); // Load from .env in current directory by default
 const uri = process.env.MONGODB_URI;
 const options = {
     maxPoolSize: 10,
-    serverSelectionTimeoutMS: 5000,
+    serverSelectionTimeoutMS: 20000, // Increased to 20s for Vercel
     socketTimeoutMS: 45000,
-    connectTimeoutMS: 10000,
+    connectTimeoutMS: 20000, // Increased to 20s
     retryWrites: true,
     retryReads: true,
 
