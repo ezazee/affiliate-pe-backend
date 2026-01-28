@@ -32,13 +32,42 @@ const calculateCost = (distanceInKm: number, rates: any): { cost: number; rateAp
 
 // Geocode an address using Mapbox
 const geocodeAddress = async (address: string): Promise<{ lon: number; lat: number; place_name: string }> => {
-    const response = await fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(address)}.json?access_token=${MAPBOX_API_KEY}&limit=1&country=ID`);
+    // Increase limit to find better matches if the first one is too generic
+    const response = await fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(address)}.json?access_token=${MAPBOX_API_KEY}&limit=5&country=ID`);
     const data = await response.json();
     if (!data.features || data.features.length === 0) {
         throw new Error('Address not found.');
     }
-    const [lon, lat] = data.features[0].center;
-    return { lon, lat, place_name: data.features[0].place_name };
+
+    // Priority order for place types
+    const typePriority: { [key: string]: number } = {
+        'address': 1,
+        'poi': 2,
+        'neighborhood': 3,
+        'locality': 4,
+        'place': 5,
+        'region': 6,
+        'country': 7
+    };
+
+    // Sort features by priority
+    const features = data.features.sort((a: any, b: any) => {
+        const typeA = a.place_type[0];
+        const typeB = b.place_type[0];
+        const priorityA = typePriority[typeA] || 99;
+        const priorityB = typePriority[typeB] || 99;
+
+        // If priority is different, lower number wins (more specific)
+        if (priorityA !== priorityB) {
+            return priorityA - priorityB;
+        }
+        // If same priority, trust Mapbox relevance
+        return b.relevance - a.relevance;
+    });
+
+    const selectedFeature = features[0];
+    const [lon, lat] = selectedFeature.center;
+    return { lon, lat, place_name: selectedFeature.place_name };
 };
 
 interface ShippingSettings {
