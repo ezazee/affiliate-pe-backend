@@ -42,6 +42,31 @@ const swaggerOptions = {
 };
 
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs, swaggerOptions));
+
+// DB Connection Check Middleware
+import clientPromise, { connectionError } from './config/database';
+app.use(async (req, res, next) => {
+    // Skip for Swagger assets to ensure docs always load
+    if (req.path.startsWith('/api-docs')) return next();
+
+    try {
+        const client = await clientPromise;
+        if (!client) {
+            return res.status(503).json({
+                error: 'Service Unavailable: Database Connection Failed',
+                details: connectionError ? connectionError.message : 'Unknown Connection Error'
+            });
+        }
+        next();
+    } catch (err) {
+        // Should match the catch in database.ts, but just in case
+        return res.status(503).json({
+            error: 'Service Unavailable: Database Error',
+            details: err instanceof Error ? err.message : String(err)
+        });
+    }
+});
+
 app.use(authenticateUser); // Global auth middleware (populates req.user if token present)
 
 // Routes

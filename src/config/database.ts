@@ -20,6 +20,7 @@ if (!uri) {
 
 let client: MongoClient;
 let clientPromise: Promise<MongoClient>;
+export let connectionError: Error | any = null;
 
 if (!uri) {
     clientPromise = Promise.reject(new Error('MONGODB_URI not defined'));
