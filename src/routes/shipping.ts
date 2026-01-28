@@ -56,7 +56,30 @@ router.post('/', async (req, res) => {
 
     try {
         const { shippingAddress, district, city, province, postalCode } = req.body;
-        const fullAddress = `${shippingAddress}, ${district}, ${city}, ${province}, ${postalCode}`;
+
+        // Intelligent Address Construction
+        // If the shippingAddress is from autocomplete, it likely contains the full context.
+        // We check if it seems "complete" to avoid duplicating context which confuses Mapbox.
+        let fullAddress = shippingAddress;
+
+        const lowerAddr = shippingAddress.toLowerCase();
+        const lowerCity = (city || '').toLowerCase();
+        const lowerProv = (province || '').toLowerCase();
+
+        // Simple heuristic: If address doesn't contain the city name (or part of it) AND doesn't contain the postal code, append details.
+        // We strip "KOTA" or "KABUPATEN" from city for fuzzy matching
+        const cleanCity = lowerCity.replace('kota ', '').replace('kabupaten ', '');
+        const hasCity = lowerAddr.includes(cleanCity);
+        const hasPostal = postalCode && shippingAddress.includes(postalCode);
+
+        if (!hasCity && !hasPostal) {
+            fullAddress = `${shippingAddress}, ${district}, ${city}, ${province}, ${postalCode}`;
+        }
+        // If it has city or postal, we trust shippingAddress is sufficient/better as is.
+        // Maybe append Indonesia just in case
+        if (!lowerAddr.includes('indonesia')) {
+            fullAddress += ', Indonesia';
+        }
 
         // Fetch settings
         const client = await clientPromise;
