@@ -31,14 +31,14 @@ const calculateCost = (distanceInKm: number, rates: any): { cost: number; rateAp
 };
 
 // Geocode an address using Mapbox
-const geocodeAddress = async (address: string): Promise<{ lon: number; lat: number }> => {
+const geocodeAddress = async (address: string): Promise<{ lon: number; lat: number; place_name: string }> => {
     const response = await fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(address)}.json?access_token=${MAPBOX_API_KEY}&limit=1&country=ID`);
     const data = await response.json();
     if (!data.features || data.features.length === 0) {
         throw new Error('Address not found.');
     }
     const [lon, lat] = data.features[0].center;
-    return { lon, lat };
+    return { lon, lat, place_name: data.features[0].place_name };
 };
 
 interface ShippingSettings {
@@ -154,6 +154,11 @@ router.post('/', async (req, res) => {
             shippingCost: Math.round(shippingCost),
             distanceInKm: Math.round(distanceInKm * 100) / 100,
             appliedRateDetails: policyDescription,
+            debug: {
+                origin: originCoords.place_name,
+                destination: destinationCoords.place_name,
+                routesFound: routes.length
+            }
         });
 
     } catch (error: any) {
