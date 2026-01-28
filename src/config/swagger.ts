@@ -10,6 +10,10 @@ const options: swaggerJsdoc.Options = {
         },
         servers: [
             {
+                url: 'https://affiliate-pe-backend.vercel.app/api',
+                description: 'Production Server',
+            },
+            {
                 url: 'http://localhost:3001/api',
                 description: 'Development Server',
             },
