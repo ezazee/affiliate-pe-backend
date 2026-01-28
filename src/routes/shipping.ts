@@ -123,8 +123,8 @@ router.post('/', async (req, res) => {
             return res.status(400).json({ error: `The shipping destination address ('${fullAddress}') could not be found.` });
         }
 
-        // Mapbox Directions API
-        const directionsResponse = await fetch(`https://api.mapbox.com/directions/v5/mapbox/driving/${originCoords.lon},${originCoords.lat};${destinationCoords.lon},${destinationCoords.lat}?access_token=${MAPBOX_API_KEY}`);
+        // Mapbox Directions API with alternatives to find the shortest path
+        const directionsResponse = await fetch(`https://api.mapbox.com/directions/v5/mapbox/driving/${originCoords.lon},${originCoords.lat};${destinationCoords.lon},${destinationCoords.lat}?access_token=${MAPBOX_API_KEY}&alternatives=true&geometries=geojson`);
 
         if (!directionsResponse.ok) {
             return res.status(502).json({ error: `Mapbox Directions API request failed.` });
@@ -136,7 +136,16 @@ router.post('/', async (req, res) => {
             return res.status(400).json({ error: "A shipping route could not be calculated." });
         }
 
-        const distanceInMeters = directionsData.routes[0].distance;
+        // Find the route with the shortest distance
+        const routes = directionsData.routes;
+        let shortestRoute = routes[0];
+        for (const route of routes) {
+            if (route.distance < shortestRoute.distance) {
+                shortestRoute = route;
+            }
+        }
+
+        const distanceInMeters = shortestRoute.distance;
         const distanceInKm = distanceInMeters / 1000;
 
         const { cost: shippingCost, policyDescription } = calculateCost(distanceInKm, { short_rate, medium_rate, long_rate, long_flat_rate });
