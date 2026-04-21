@@ -1,9 +1,7 @@
-import { ObjectId } from 'mongodb';
-
 export type CommissionType = 'percentage' | 'fixed';
 
 export interface Product {
-    _id?: ObjectId | string;
+    _id?: any;
     id: string;
     name: string;
     slug: string;
@@ -12,5 +10,8 @@ export interface Product {
     imageUrl?: string;
     commissionType: CommissionType;
     commissionValue: number;
+    weight?: number;
     isActive: boolean;
+    createdAt: Date;
+    updatedAt: Date;
 }

@@ -1,21 +1,22 @@
 import express from 'express';
-import clientPromise from '../config/database';
-import { ObjectId } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
-import { Order, OrderStatus } from '../types/order';
+import { Order, Product, User, Commission } from '../models';
 import { adminNotifications, affiliatorNotifications } from '../services/notification-service';
+import { biteshipService } from '../services/biteship';
+import { createDokuPayment, checkDokuStatus } from '../services/doku';
+import { Op } from 'sequelize';
 
 const router = express.Router();
 
 // Helper to generate unique order number
-const generateOrderNumber = async (db: any): Promise<string> => {
+const generateOrderNumber = async (): Promise<string> => {
     const prefix = 'ORDER';
     let isUnique = false;
     let orderNumber = '';
     while (!isUnique) {
         const randomPart = Math.random().toString(36).substring(2, 9).toUpperCase();
         orderNumber = `${prefix}-${randomPart}`;
-        const existingOrder = await db.collection('orders').findOne({ orderNumber });
+        const existingOrder = await Order.findOne({ where: { orderNumber } });
         if (!existingOrder) {
             isUnique = true;
         }
@@ -25,72 +26,17 @@ const generateOrderNumber = async (db: any): Promise<string> => {
 
 /**
  * @swagger
- * tags:
- *   name: Public
- *   description: Endpoint Publik
- */
-
-/**
- * @swagger
  * /orders:
  *   post:
  *     summary: Buat pesanan baru (Publik)
  *     tags: [Public]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - buyerName
- *               - buyerPhone
- *               - shippingAddress
- *               - city
- *               - province
- *               - postalCode
- *               - productId
- *               - affiliatorId
- *             properties:
- *               buyerName:
- *                 type: string
- *               buyerPhone:
- *                 type: string
- *               shippingAddress:
- *                 type: string
- *               district:
- *                 type: string
- *               city:
- *                 type: string
- *               province:
- *                 type: string
- *               postalCode:
- *                 type: string
- *               orderNote:
- *                 type: string
- *               productId:
- *                 type: string
- *               affiliatorId:
- *                 type: string
- *               affiliateCode:
- *                 type: string
- *               affiliateName:
- *                 type: string
- *               shippingCost:
- *                 type: number
- *               totalPrice:
- *                 type: number
- *     responses:
- *       201:
- *         description: Order created
- *       400:
- *         description: Missing fields
  */
 router.post('/', async (req, res) => {
     try {
         const {
             buyerName,
             buyerPhone,
+            buyerEmail,
             shippingAddress,
             district,
             city,
@@ -103,54 +49,65 @@ router.post('/', async (req, res) => {
             affiliateName,
             shippingCost,
             totalPrice,
+            destinationAreaId,
+            courierName,
+            courierService,
         } = req.body;
 
         if (
-            !buyerName || !buyerPhone || !shippingAddress || !district || !city || !province || !postalCode ||
+            !buyerName || !buyerPhone || !buyerEmail || !shippingAddress || !district || !city || !province || !postalCode ||
             !productId || !affiliatorId || !affiliateCode || !affiliateName ||
             shippingCost === undefined || totalPrice === undefined
         ) {
             return res.status(400).json({ error: 'Missing required fields' });
         }
 
-        const client = await clientPromise;
-        const db = client.db();
-
-        const orderNumber = await generateOrderNumber(db);
+        const orderNumber = await generateOrderNumber();
         const paymentToken = uuidv4();
-        const paymentTokenExpiresAt = new Date(Date.now() + 1 * 60 * 1000);
+        const paymentTokenExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 jam
 
-        const product = await db.collection('products').findOne({ _id: new ObjectId(productId) });
+        const product = await Product.findOne({ 
+            where: {
+                [Op.or]: [{ id: productId }, { _id: productId }]
+            }
+        });
         const productPrice = product?.price || 0;
 
-        const orderToInsert = {
+        const order = await Order.create({
             orderNumber,
             paymentToken,
             paymentTokenExpiresAt,
             isPaymentUsed: false,
             buyerName,
             buyerPhone,
+            buyerEmail,
             shippingAddress,
             district,
             city,
             province,
             postalCode,
-            productId,
+            productId: product?.id || productId,
             affiliatorId,
             affiliateCode,
             affiliateName,
-            status: 'pending' as OrderStatus,
+            status: 'pending',
             shippingCost,
-            productPrice,
-            totalPrice,
+            productPrice: Number(productPrice),
+            totalPrice: Number(totalPrice),
             orderNote,
+            // Data kurir dari pilihan pembeli
+            destinationAreaId: destinationAreaId || null,
+            courierName: courierName || null,
+            courierService: courierService || null,
             createdAt: new Date(),
-        };
-
-        await db.collection('orders').insertOne(orderToInsert);
+        });
 
         // Notifications
-        const affiliator = await db.collection('users').findOne({ _id: new ObjectId(affiliatorId) });
+        const affiliator = await User.findOne({ 
+            where: {
+                [Op.or]: [{ id: affiliatorId }, { _id: affiliatorId }]
+            }
+        });
 
         try {
             await adminNotifications.newOrder(
@@ -161,7 +118,7 @@ router.post('/', async (req, res) => {
 
             if (affiliator && affiliator.email) {
                 const commissionRate = 0.1;
-                const commissionAmount = Math.round(productPrice * commissionRate);
+                const commissionAmount = Math.round(Number(productPrice) * commissionRate);
                 await affiliatorNotifications.newOrder(
                     orderNumber,
                     commissionAmount.toLocaleString('id-ID'),
@@ -172,29 +129,87 @@ router.post('/', async (req, res) => {
             console.error('Notification error', e);
         }
 
-        return res.status(201).json({
-            paymentToken: orderToInsert.paymentToken,
-            orderNumber: orderToInsert.orderNumber,
-            status: orderToInsert.status
-        });
+        // ==============================================
+        // BUAT SESI PEMBAYARAN DOKU
+        // ==============================================
+        try {
+            const dokuPayment = await createDokuPayment({
+                orderNumber,
+                totalPrice: Number(totalPrice),
+                buyerName,
+                buyerEmail,
+                buyerPhone,
+                productName: product?.name || 'Produk PE Skinpro',
+                productPrice: Number(productPrice),
+            });
+
+            return res.status(201).json({
+                paymentToken: order.paymentToken,
+                orderNumber: order.orderNumber,
+                status: order.status,
+                paymentUrl: dokuPayment.paymentUrl,
+            });
+        } catch (dokuError: any) {
+            console.error('❌ DOKU payment creation failed:', dokuError.response?.data || dokuError.message);
+            // Fallback: kembalikan token lama agar tidak kehilangan order
+            return res.status(201).json({
+                paymentToken: order.paymentToken,
+                orderNumber: order.orderNumber,
+                status: order.status,
+                paymentUrl: null,
+                error: 'Terdapat kendala pada Payment Gateway (DOKU). Mohon cek kembali nomor HP Anda atau hubungi admin.',
+            });
+        }
     } catch (error) {
         console.error('Order creation error:', error);
         return res.status(500).json({ error: 'Something went wrong' });
     }
 });
 
-// GET /orders/:orderNumber
+import { OrderService } from '../services/order-service';
+
+/**
+ * @swagger
+ * /orders/{orderNumber}:
+ *   get:
+ *     summary: Get order by order number (With Auto-Polling for DOKU)
+ */
 router.get('/:orderNumber', async (req, res) => {
     try {
         const { orderNumber } = req.params;
-        const client = await clientPromise;
-        const db = client.db();
-
-        const order = await db.collection('orders').findOne({ orderNumber });
+        let order = await Order.findOne({ 
+            where: { orderNumber },
+            include: [
+                {
+                    model: Product,
+                    as: 'product'
+                },
+                {
+                    model: User,
+                    as: 'affiliator',
+                    attributes: ['id', 'name', 'email']
+                }
+            ]
+        });
 
         if (!order) {
             return res.status(404).json({ error: 'Order not found' });
         }
+
+        // AUTO-POLLING: Jika masih pending, cek status ke DOKU via Gateway
+        if (order.status === 'pending') {
+            try {
+                const dokuStatus = await checkDokuStatus(orderNumber);
+                
+                // Jika DOKU bilang SUCCESS di Gateway, update order di sini
+                if (dokuStatus?.transaction?.status === 'SUCCESS') {
+                    order = await OrderService.handleOrderPaid(orderNumber);
+                }
+            } catch (pollError: any) {
+                // Silently ignore polling network errors
+            }
+        }
+
         return res.json(order);
     } catch (error) {
         console.error('Error fetching order:', error);
@@ -202,7 +217,12 @@ router.get('/:orderNumber', async (req, res) => {
     }
 });
 
-// PATCH /orders/:orderNumber
+/**
+ * @swagger
+ * /orders/{orderNumber}:
+ *   patch:
+ *     summary: Update order status
+ */
 router.patch('/:orderNumber', async (req, res) => {
     try {
         const { orderNumber } = req.params;
@@ -212,124 +232,43 @@ router.patch('/:orderNumber', async (req, res) => {
             return res.status(400).json({ error: 'Status is required' });
         }
 
-        const client = await clientPromise;
-        const db = client.db();
+        const order = await Order.findOne({ where: { orderNumber } });
 
-        const result = await db.collection('orders').updateOne(
-            { orderNumber },
-            {
-                $set: {
-                    status,
-                    updatedAt: new Date()
-                }
-            }
-        );
-
-        if (result.matchedCount === 0) {
+        if (!order) {
             return res.status(404).json({ error: 'Order not found' });
         }
 
-        // Fetch the updated order to get details for notifications/commissions
-        const order = await db.collection('orders').findOne({ orderNumber });
-        if (!order) {
-            return res.status(404).json({ error: 'Order not found after update' });
-        }
-
-        // Handle Side Effects (Timestamps, Notifications, Commissions)
-        const updateData: any = {};
+        // Handle Side Effects (Timestamps)
+        const updateData: any = { status, updatedAt: new Date() };
         if (status === 'shipped') {
             updateData.shippedAt = new Date();
         } else if (status === 'completed') {
             updateData.completedAt = new Date();
         }
 
-        // Apply timestamp updates if any
-        if (Object.keys(updateData).length > 0) {
-            await db.collection('orders').updateOne({ orderNumber }, { $set: updateData });
+        // Jika status yang diupdate adalah 'paid', gunakan OrderService
+        if (status === 'paid') {
+            await OrderService.handleOrderPaid(orderNumber);
+        } else {
+            await order.update(updateData);
         }
 
-        // Send Notifications & Handle Commissions
-        try {
-            const affiliator = await db.collection('users').findOne({ _id: new ObjectId(order.affiliatorId) });
-            const targetEmail = affiliator?.email;
-
-            if (targetEmail) {
-                if (status === 'shipped' || status === 'shipping') {
-                    await affiliatorNotifications.orderShipped(
-                        orderNumber,
-                        order.buyerName,
-                        targetEmail
-                    );
-                } else if (status === 'paid' || status === 'completed') {
-                    // Send Paid Notification
-                    await affiliatorNotifications.orderPaid(
-                        orderNumber,
-                        targetEmail
-                    );
-
-                    // Also send Completed notification if it was explicitly 'completed' (legacy behavior compatibility)
-                    if (status === 'completed') {
-                        await affiliatorNotifications.orderCompleted(
-                            orderNumber,
-                            order.buyerName,
-                            targetEmail
-                        );
-                    }
-
-                    // COMMISSION LOGIC (Triggered on PAID or COMPLETED)
-                    // 1. Check if commission already exists to avoid duplicates
-                    const existingCommission = await db.collection('commissions').findOne({
-                        orderNumber: orderNumber
-                    });
-
-                    if (!existingCommission) {
-                        const commissionRate = 0.1; // 10% commission
-                        const commissionAmount = Math.round(order.productPrice * commissionRate);
-
-                        // Fetch product for name
-                        const product = await db.collection('products').findOne({ _id: new ObjectId(order.productId) });
-
-                        // Insert commission
-                        await db.collection('commissions').insertOne({
-                            orderNumber,
-                            orderId: orderNumber,
-                            affiliatorId: order.affiliatorId,
-                            productId: order.productId,
-                            productName: product?.name || 'Product',
-                            amount: commissionAmount,
-                            status: 'paid', // Mark as paid so it is withdrawable
-                            createdAt: new Date(),
-                            date: new Date(),
-                            completedAt: new Date()
-                        });
-
-                        // Calculate and send balance update notification
-                        const allCommissions = await db.collection('commissions').find({
-                            affiliatorId: order.affiliatorId,
-                            status: 'paid'
-                        }).toArray();
-
-                        const availableBalance = allCommissions.reduce((sum, commission) => {
-                            const usedAmount = commission.usedAmount || 0;
-                            return sum + (commission.amount - usedAmount);
-                        }, 0);
-
-                        await affiliatorNotifications.commissionEarned(
-                            commissionAmount.toLocaleString('id-ID'),
-                            orderNumber,
-                            targetEmail
-                        );
-
-                        await affiliatorNotifications.balanceUpdated(
-                            availableBalance.toLocaleString('id-ID'),
-                            targetEmail
-                        );
+        // Jika status adalah shipped/completed, kirim notifikasi manual
+        if (status === 'shipped' || status === 'completed') {
+            try {
+                const affiliator = await User.findOne({ 
+                    where: { [Op.or]: [{ id: order.affiliatorId }, { _id: order.affiliatorId }] }
+                });
+                if (affiliator?.email) {
+                    if (status === 'shipped') {
+                        await affiliatorNotifications.orderShipped(orderNumber, order.buyerName, affiliator.email);
+                    } else {
+                        await affiliatorNotifications.orderCompleted(orderNumber, order.buyerName, affiliator.email);
                     }
                 }
+            } catch (err) {
+                console.error('❌ Notification error for status update:', err);
             }
-        } catch (notificationError) {
-            console.error('❌ Failed to send notifications/commissions for order update:', notificationError);
-            // Don't fail the request if notifications fail, but log it.
         }
 
         return res.json({ message: `Order ${orderNumber} status updated to ${status}` });

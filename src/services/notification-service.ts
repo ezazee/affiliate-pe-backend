@@ -1,12 +1,12 @@
 import webpush from 'web-push';
-import clientPromise from '../config/database';
+import { Notification, User, Setting } from '../models';
 import {
     notificationTemplates,
     NotificationTemplateId,
     NotificationVariables,
     formatNotificationText
 } from './notification-templates';
-import { ObjectId } from 'mongodb';
+import { Op } from 'sequelize';
 
 const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY;
 const vapidPublicKey = process.env.VAPID_PUBLIC_KEY;
@@ -41,52 +41,38 @@ async function saveInAppNotification(
     target: NotificationTarget
 ): Promise<{ [email: string]: string } | null> {
     try {
-        const client = await clientPromise;
-        const db = client.db();
-        const notificationsCollection = db.collection('notifications');
-
-        const notificationDoc = {
-            title: data.title,
-            message: data.body, // Mapping body to message for WebNotification type
-            type: data.type || 'info',
-            url: data.url,
-            timestamp: new Date(),
-            read: false,
-            target, // Store target info to filter queries
-            createdAt: new Date()
-        };
-
-        const usersCollection = db.collection('users');
-        let query: any = {};
+        let userQuery: any = {};
 
         if (target.role === 'admin') {
-            query.role = 'admin';
+            userQuery.role = 'admin';
         } else if (target.role === 'affiliator') {
-            query.role = { $in: ['affiliator', 'affiliate'] };
+            userQuery.role = 'affiliator';
         } else if (target.userEmail) {
-            query.email = target.userEmail;
+            userQuery.email = target.userEmail;
         } else if (target.userId) {
-            query._id = new ObjectId(target.userId);
+            userQuery[Op.or] = [{ id: target.userId }, { _id: target.userId }];
         }
 
-        const users = await usersCollection.find(query).toArray();
+        const users = await User.findAll({ where: userQuery });
 
         if (users.length > 0) {
-            const notifications = users.map(user => ({
-                ...notificationDoc,
+            const notificationsToCreate = users.map(user => ({
+                title: data.title,
+                message: data.body,
+                type: data.type || 'info',
+                url: data.url,
+                timestamp: new Date(),
+                read: false,
                 userEmail: user.email,
-                userId: user._id.toString(),
-                target: undefined // Remove generic target
+                userId: user.id
             }));
 
-            const result = await notificationsCollection.insertMany(notifications);
+            const createdNotifications = await Notification.bulkCreate(notificationsToCreate);
 
             // Create map of Email -> Notification ID
             const emailMap: { [email: string]: string } = {};
-            Object.values(result.insertedIds).forEach((id, index) => {
-                if (notifications[index]) {
-                    emailMap[notifications[index].userEmail] = id.toString();
-                }
+            createdNotifications.forEach(n => {
+                emailMap[n.userEmail] = n.id;
             });
 
             return emailMap;
@@ -94,9 +80,8 @@ async function saveInAppNotification(
         return null;
 
     } catch (error) {
-        // Silent error
         console.error('Error saving in-app notification:', error);
-        return null; // Return null on error so flow continues
+        return null;
     }
 }
 
@@ -104,36 +89,30 @@ async function saveInAppNotification(
 async function sendPushNotification(
     data: NotificationData,
     target?: NotificationTarget,
-    userNotificationMap?: { [email: string]: string } // Map email to notification _id
+    userNotificationMap?: { [email: string]: string }
 ): Promise<{ success: boolean; sent: number; failed: number; message: string }> {
     try {
-        const client = await clientPromise;
-        const db = client.db();
-        const usersCollection = db.collection('users');
-
-        // Build query based on target
-        let query: any = {
-            pushSubscription: { $exists: true, $ne: null },
-            $or: [
+        let userQuery: any = {
+            pushSubscription: { [Op.ne]: null },
+            [Op.or]: [
                 { notificationsEnabled: true },
-                { notificationsEnabled: { $exists: false }, },
-                { notificationsEnabled: null }
+                { notificationsEnabled: { [Op.is]: null } }
             ]
         };
 
         if (target) {
             if (target.role === 'admin') {
-                query.role = 'admin';
+                userQuery.role = 'admin';
             } else if (target.role === 'affiliator') {
-                query.role = { $in: ['affiliator', 'affiliate'] };
+                userQuery.role = 'affiliator';
             } else if (target.userEmail) {
-                query.email = target.userEmail;
+                userQuery.email = target.userEmail;
             } else if (target.userId) {
-                query._id = new ObjectId(target.userId);
+                userQuery[Op.or] = [{ id: target.userId }, { _id: target.userId }];
             }
         }
 
-        const users = await usersCollection.find(query).toArray();
+        const users = await User.findAll({ where: userQuery });
 
         if (users.length === 0) {
             return {
@@ -144,7 +123,6 @@ async function sendPushNotification(
             };
         }
 
-        // We prepare the base payload options
         const basePayload = {
             title: data.title,
             body: data.body,
@@ -157,7 +135,6 @@ async function sendPushNotification(
             try {
                 if (!user.pushSubscription) return { success: false, userId: user.email, error: 'No subscription' };
 
-                // Customize payload with notification ID if available
                 const userPayload = {
                     ...basePayload,
                     data: {
@@ -173,13 +150,10 @@ async function sendPushNotification(
 
                 // Remove invalid subscription
                 if (error.statusCode === 410 || error.statusCode === 404) {
-                    await usersCollection.updateOne(
-                        { email: user.email },
-                        {
-                            $unset: { pushSubscription: '' },
-                            $set: { notificationsEnabled: false },
-                        }
-                    );
+                    await user.update({
+                        pushSubscription: null,
+                        notificationsEnabled: false
+                    });
                 }
 
                 return { success: false, userId: user.email, error: error.message };
@@ -211,19 +185,14 @@ async function sendPushNotification(
     }
 }
 
-// Function to get template with custom overrides
 async function getResolvedTemplate(templateId: NotificationTemplateId) {
     const defaultTemplate = notificationTemplates.find(t => t.id === templateId);
     if (!defaultTemplate) return null;
 
     try {
-        const client = await clientPromise;
-        const db = client.db();
-        const settings = await db.collection('settings').findOne({ key: 'notificationTemplates' });
+        const settings = await Setting.findOne({ where: { name: 'notificationTemplates' } });
+        const custom = settings?.value?.templates?.find((t: any) => t.templateId === templateId);
 
-        const custom = settings?.templates?.find((t: any) => t.templateId === templateId);
-
-        // If explicitly disabled
         if (custom && custom.enabled === false) {
             return null;
         }
@@ -237,7 +206,6 @@ async function getResolvedTemplate(templateId: NotificationTemplateId) {
         };
     } catch (error) {
         console.error('Error fetching template settings:', error);
-        // Fallback to default
         return {
             title: defaultTemplate.defaultTitle,
             body: defaultTemplate.defaultBody,
@@ -248,7 +216,6 @@ async function getResolvedTemplate(templateId: NotificationTemplateId) {
     }
 }
 
-// Main function to trigger notification by template
 export async function sendTemplateNotification(
     templateId: NotificationTemplateId,
     variables: NotificationVariables,
@@ -264,7 +231,6 @@ export async function sendTemplateNotification(
     const body = formatNotificationText(template.body, variables);
     const url = formatNotificationText(template.url, variables);
 
-    // Determine target
     let target: NotificationTarget = {};
 
     if (targetOverride) {
@@ -277,16 +243,13 @@ export async function sendTemplateNotification(
         }
     }
 
-    // Map category to notification type
     let type: 'info' | 'success' | 'warning' | 'error' = 'info';
     if (template.category === 'commission' || template.category === 'order') type = 'success';
     if (template.category === 'withdrawal') type = 'warning';
     if (templateId === 'withdrawal_rejected') type = 'error';
 
-    // 1. Save In-App Notification and get ID Mapping
     const userNotificationMap = await saveInAppNotification({ title, body, url, type }, target);
 
-    // 2. Send Push Notification with IDs
     return sendPushNotification(
         { title, body, url, type },
         target,
@@ -294,7 +257,6 @@ export async function sendTemplateNotification(
     );
 }
 
-// Helper methods
 export const adminNotifications = {
     newAffiliator: (name: string, email: string) =>
         sendTemplateNotification('new_affiliate', { name, email }, { role: 'admin' }),

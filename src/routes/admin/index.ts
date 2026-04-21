@@ -11,11 +11,13 @@ import settingsRoutes from './settings';
 import landingSettingsRoutes from './landing-settings';
 import affiliatorRoutes from './affiliators';
 import linkRoutes from './links';
-import cleanupRoutes from './cleanup';
-import purgeRoutes from './purge';
 import statsRoutes from './stats';
+import { authenticateUser, requireAuth, requireAdmin } from '../../middleware/auth';
 
 const router = express.Router();
+
+// Apply global admin security: Must be logged in AND must be an admin
+router.use(authenticateUser, requireAuth, requireAdmin);
 
 router.use('/products', productRoutes);
 router.use('/dashboard', dashboardRoutes);
@@ -27,8 +29,6 @@ router.use('/settings', settingsRoutes);
 router.use('/landing-settings', landingSettingsRoutes);
 router.use('/affiliators', affiliatorRoutes);
 router.use('/links', linkRoutes);
-router.use('/cleanup', cleanupRoutes);
-router.use('/purge', purgeRoutes);
 router.use('/stats', statsRoutes);
 
 export default router;

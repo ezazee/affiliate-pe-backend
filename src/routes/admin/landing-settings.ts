@@ -1,5 +1,5 @@
 import express from 'express';
-import clientPromise from '../../config/database';
+import { Setting } from '../../models';
 
 const router = express.Router();
 
@@ -9,16 +9,10 @@ const router = express.Router();
  *   get:
  *     summary: Get landing page settings
  *     tags: [Admin]
- *     responses:
- *       200:
- *         description: Landing page settings
  */
 router.get('/', async (req, res) => {
     try {
-        const client = await clientPromise;
-        const db = client.db();
-        const settingsCursor = db.collection('settings').find({});
-        const settingsArray = await settingsCursor.toArray();
+        const settingsArray = await Setting.findAll();
 
         const settings = settingsArray.reduce((acc, setting) => {
             acc[setting.name] = setting.value;
@@ -53,14 +47,6 @@ router.get('/', async (req, res) => {
  *   post:
  *     summary: Update landing page settings
  *     tags: [Admin]
- *     requestBody:
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *     responses:
- *       200:
- *         description: Settings updated
  */
 router.post('/', async (req, res) => {
     try {
@@ -70,16 +56,9 @@ router.post('/', async (req, res) => {
             return res.status(400).json({ error: 'Invalid request body' });
         }
 
-        const client = await clientPromise;
-        const db = client.db();
-
         const updatePromises = Object.entries(body).map(([key, value]) => {
             const settingName = `landing${key.charAt(0).toUpperCase() + key.slice(1)}`;
-            return db.collection('settings').updateOne(
-                { name: settingName },
-                { $set: { name: settingName, value } },
-                { upsert: true }
-            );
+            return Setting.upsert({ name: settingName, value });
         });
 
         await Promise.all(updatePromises);

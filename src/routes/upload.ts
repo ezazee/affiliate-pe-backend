@@ -1,6 +1,7 @@
 import express from 'express';
-import { put } from '@vercel/blob';
 import multer from 'multer';
+import { PutObjectCommand } from "@aws-sdk/client-s3";
+import { s3Client, bucketName, publicUrl } from '../lib/s3';
 
 const router = express.Router();
 const upload = multer(); // Handle multipart/form-data
@@ -34,24 +35,28 @@ router.post('/', upload.single('file'), async (req, res) => {
             sizeWarning = `Image size is ${(file.size / 1024).toFixed(0)}KB. Consider compressing.`;
         }
 
-        if (!process.env.BLOB_READ_WRITE_TOKEN) {
-            return res.status(500).json({ error: 'Blob storage not configured' });
-        }
-
         const timestamp = Date.now();
         const fileExtension = file.originalname.split('.').pop();
-        const filename = `landing-about-${timestamp}.${fileExtension}`;
+        
+        // Dynamic folder support (default to 'general' if not specified)
+        const folder = req.body.type || 'general';
+        const filename = `${folder}/${folder}-${timestamp}.${fileExtension}`;
 
-        const blob = await put(filename, file.buffer, {
-            access: 'public',
-            token: process.env.BLOB_READ_WRITE_TOKEN,
-            contentType: file.mimetype,
-        });
+        // Upload to Minio
+        await s3Client.send(new PutObjectCommand({
+            Bucket: bucketName,
+            Key: filename,
+            Body: file.buffer,
+            ContentType: file.mimetype,
+        }));
+
+        // Generate URL
+        const finalUrl = `${publicUrl}/${bucketName}/${filename}`;
 
         const response: any = {
             success: true,
-            url: blob.url,
-            filename: blob.pathname,
+            url: finalUrl,
+            filename: filename,
             size: file.size,
             sizeKB: Math.round(file.size / 1024),
             type: file.mimetype
@@ -63,7 +68,7 @@ router.post('/', upload.single('file'), async (req, res) => {
 
         return res.json(response);
     } catch (error) {
-        console.error('Error uploading image:', error);
+        console.error('Error uploading image to Minio:', error);
         return res.status(500).json({ error: 'Failed to upload image' });
     }
 });

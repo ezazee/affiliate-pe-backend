@@ -1,7 +1,6 @@
 import express from 'express';
-import clientPromise from '../../config/database';
-import { User } from '../../types';
-import { ObjectId } from 'mongodb';
+import { User } from '../../models';
+import { Op } from 'sequelize';
 
 const router = express.Router();
 
@@ -11,26 +10,11 @@ const router = express.Router();
  *   get:
  *     summary: Ambil semua afiliator
  *     tags: [Admin]
- *     responses:
- *       200:
- *         description: List of affiliators
  */
 router.get('/', async (req, res) => {
     try {
-        const client = await clientPromise;
-        const db = client.db();
-
-        const affiliators = await db.collection<User>('users').find({ role: 'affiliator' }).toArray();
-
-        const formattedAffiliators = affiliators.map(affiliator => {
-            const { id, ...rest } = affiliator;
-            return {
-                ...rest,
-                id: affiliator._id.toString(),
-            };
-        });
-
-        return res.json(formattedAffiliators);
+        const affiliators = await User.findAll({ where: { role: 'affiliator' } });
+        return res.json(affiliators);
     } catch (error) {
         console.error('Error fetching affiliators:', error);
         return res.status(500).json({ error: 'Something went wrong' });
@@ -43,28 +27,22 @@ router.get('/', async (req, res) => {
  *   delete:
  *     summary: Hapus afiliator (Admin)
  *     tags: [Admin]
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *     responses:
- *       200:
- *         description: Affiliator deleted
  */
 router.delete('/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const client = await clientPromise;
-        const db = client.db();
+        const affiliator = await User.findOne({
+            where: {
+                [Op.or]: [{ id }, { _id: id }],
+                role: 'affiliator'
+            }
+        });
 
-        const result = await db.collection('users').deleteOne({ _id: new ObjectId(id), role: 'affiliator' });
-
-        if (result.deletedCount === 0) {
+        if (!affiliator) {
             return res.status(404).json({ error: 'Affiliator not found' });
         }
 
+        await affiliator.destroy();
         return res.json({ message: 'Affiliator deleted successfully' });
 
     } catch (error) {
@@ -73,49 +51,17 @@ router.delete('/:id', async (req, res) => {
     }
 });
 
-// Update affiliator status (approve/reject) often exists but maybe in separate file. 
-// Adding generic PUT for user details if needed, but usually approval is specific.
-// I will check if there is an approval route elsewhere. 
-// There is /users/:id/status usually, but let's add generic delete support here.
-
 /**
  * @swagger
  * /admin/affiliators/{id}:
  *   put:
  *     summary: Update status afiliator (Admin)
  *     tags: [Admin]
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               status:
- *                 type: string
- *                 enum: [pending, approved, rejected, suspended]
- *               name:
- *                 type: string
- *               email:
- *                 type: string
- *               phone:
- *                 type: string
- *     responses:
- *       200:
- *         description: Status updated
  */
 router.put('/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const { status, name, email, phone } = req.body;
-        const client = await clientPromise;
-        const db = client.db();
 
         const updateData: any = {};
         if (status) updateData.status = status;
@@ -127,24 +73,20 @@ router.put('/:id', async (req, res) => {
             return res.status(400).json({ error: 'No fields to update' });
         }
 
-        const result = await db.collection('users').updateOne(
-            { _id: new ObjectId(id), role: 'affiliator' },
-            { $set: updateData }
-        );
+        const affiliator = await User.findOne({
+            where: {
+                [Op.or]: [{ id }, { _id: id }],
+                role: 'affiliator'
+            }
+        });
 
-        if (result.matchedCount === 0) {
+        if (!affiliator) {
             return res.status(404).json({ error: 'Affiliator not found' });
         }
 
-        const updatedUser = await db.collection<User>('users').findOne({ _id: new ObjectId(id) });
+        await affiliator.update(updateData);
 
-        const formattedUser = updatedUser ? {
-            ...updatedUser,
-            id: updatedUser._id.toString(),
-            _id: undefined
-        } : null;
-
-        return res.json(formattedUser);
+        return res.json(affiliator);
 
     } catch (error) {
         console.error('Error updating affiliator:', error);

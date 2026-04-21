@@ -1,7 +1,7 @@
 import express from 'express';
-import clientPromise from '../config/database';
+import { Notification } from '../models';
 import { authenticateUser } from '../middleware/auth';
-import { ObjectId } from 'mongodb';
+import { Op } from 'sequelize';
 
 const router = express.Router();
 
@@ -20,29 +20,26 @@ const router = express.Router();
 // GET /api/notifications
 router.get('/', authenticateUser, async (req, res) => {
     try {
-        // req.user is populated by authenticateUser middleware
         const user = (req as any).user;
 
         if (!user) {
             return res.status(401).json({ error: 'Unauthorized' });
         }
 
-        const client = await clientPromise;
-        const db = client.db();
-
-        const notifications = await db.collection('notifications')
-            .find({ userEmail: user.email })
-            .sort({ timestamp: -1 })
-            .limit(50)
-            .toArray();
+        const notifications = await Notification.findAll({
+            where: {
+                [Op.or]: [
+                    { userId: user.userId },
+                    { userEmail: user.email }
+                ]
+            },
+            order: [['timestamp', 'DESC']],
+            limit: 50
+        });
 
         return res.json({
             success: true,
-            notifications: notifications.map(n => ({
-                ...n,
-                id: n._id.toString(),
-                _id: undefined
-            }))
+            notifications
         });
 
     } catch (error) {
@@ -80,34 +77,42 @@ router.put('/read', authenticateUser, async (req, res) => {
     try {
         const { id, all } = req.body;
         const user = (req as any).user;
-        const userEmail = user?.email;
 
-        if (!userEmail) {
+        if (!user) {
             return res.status(401).json({ error: 'Unauthorized' });
         }
 
-        const client = await clientPromise;
-        const db = client.db();
-        const notifications = db.collection('notifications');
-
         if (all) {
-            await notifications.updateMany(
-                { userEmail: userEmail, read: false },
-                { $set: { read: true } }
+            await Notification.update(
+                { read: true },
+                {
+                    where: {
+                        [Op.or]: [
+                            { userId: user.id },
+                            { userEmail: user.email }
+                        ],
+                        read: false
+                    }
+                }
             );
         } else if (id) {
-            let query: any = { _id: new ObjectId(id), userEmail: userEmail };
-            try {
-                const result = await notifications.updateOne(
-                    query,
-                    { $set: { read: true } }
-                );
-                if (result.matchedCount === 0) {
-                    return res.status(404).json({ error: 'Notification not found' });
+            const notification = await Notification.findOne({
+                where: {
+                    [Op.and]: [
+                        { [Op.or]: [{ id: id }, { _id: id }] },
+                        { [Op.or]: [
+                            { userId: user.userId },
+                            { userEmail: user.email }
+                        ]}
+                    ]
                 }
-            } catch (e) {
-                return res.status(400).json({ error: 'Invalid ID format' });
+            });
+
+            if (!notification) {
+                return res.status(404).json({ error: 'Notification not found' });
             }
+
+            await notification.update({ read: true });
         } else {
             return res.status(400).json({ error: 'Missing ID or all flag' });
         }
@@ -154,7 +159,6 @@ router.post('/trigger', async (req, res) => {
             return res.status(400).json({ error: 'Template ID is required' });
         }
 
-        // Import service logic or mock it if complex. 
         const { sendTemplateNotification } = require('../services/notification-service');
 
         let targetOverride: any = {};

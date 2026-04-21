@@ -1,4 +1,3 @@
-import { ObjectId } from 'mongodb';
 import { BankDetails } from './withdrawal';
 
 export type UserRole = 'admin' | 'affiliator';
@@ -13,7 +12,7 @@ export interface PushSubscription {
 }
 
 export interface User {
-    _id: ObjectId;
+    _id?: any;
     id: string;
     name: string;
     email: string;
@@ -21,11 +20,18 @@ export interface User {
     role: UserRole;
     status: UserStatus;
     phone?: string;
-    referralCode: string;
+    referralCode?: string;
     registrationNumber?: string;
     bankDetails?: BankDetails;
-    createdAt: Date;
-    pushSubscription?: PushSubscription;
+    pushSubscription?: PushSubscription | null;
     notificationsEnabled?: boolean;
-    updatedAt?: Date;
+    resetPasswordToken?: string | null;
+    resetPasswordExpires?: Date | null;
+    storeName?: string;
+    storeSlug?: string;
+    storeBio?: string;
+    storeThemeColor?: string;
+    storeSocialLinks?: any;
+    createdAt: Date;
+    updatedAt: Date;
 }

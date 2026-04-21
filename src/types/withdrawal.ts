@@ -1,5 +1,3 @@
-import { ObjectId } from 'mongodb';
-
 export type WithdrawalStatus = 'pending' | 'approved' | 'rejected' | 'completed';
 
 export interface BankDetails {
@@ -9,7 +7,7 @@ export interface BankDetails {
 }
 
 export interface Withdrawal {
-    _id?: ObjectId | string;
+    _id?: any;
     id?: string;
     affiliatorId: string;
     amount: number;
@@ -18,4 +16,6 @@ export interface Withdrawal {
     requestedAt: Date;
     processedAt?: Date;
     rejectionReason?: string; // Alasan penolakan
+    createdAt: Date;
+    updatedAt: Date;
 }

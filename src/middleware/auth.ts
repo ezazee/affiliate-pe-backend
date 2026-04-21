@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import clientPromise from '../config/database';
+import { User } from '../models';
 import { Security } from '../lib/security';
 
 // Extend Express Request type to include user
@@ -13,17 +13,16 @@ declare global {
 
 export async function authenticateUser(req: Request, res: Response, next: NextFunction) {
     try {
-        // Get session from Authorization header or cookie
         const authHeader = req.headers.authorization;
-        // In Express, cookies are in req.headers.cookie string or req.cookies if cookie-parser is used.
-        // For now we'll manually parse if needed or just check header for simplicity as main auth.
-        // Ideally we should use cookie-parser if we want to support cookies fully.
-
         let sessionData = null;
 
         if (authHeader?.startsWith('Bearer ')) {
             const token = authHeader.substring(7);
-            sessionData = JSON.parse(Buffer.from(token, 'base64').toString());
+            const decoded = Security.verifyToken(token);
+            if (decoded) {
+                req.user = { email: decoded.email, userId: decoded.userId };
+                return next();
+            }
         } else if (authHeader?.startsWith('Basic ')) {
             // Handle Basic Auth (Email:Password) for Swagger
             const credentials = Buffer.from(authHeader.substring(6), 'base64').toString().split(':');
@@ -31,9 +30,7 @@ export async function authenticateUser(req: Request, res: Response, next: NextFu
             const password = credentials[1];
 
             if (email && password) {
-                const client = await clientPromise;
-                const db = client.db();
-                const user = await db.collection('users').findOne({ email });
+                const user = await User.findOne({ where: { email } });
 
                 if (user) {
                     let isValid = false;
@@ -45,13 +42,12 @@ export async function authenticateUser(req: Request, res: Response, next: NextFu
                     }
 
                     if (isValid) {
-                        req.user = { email: user.email, userId: user._id.toString() };
+                        req.user = { email: user.email, userId: user.id };
                         return next();
                     }
                 }
             }
         } else if (req.headers.cookie && req.headers.cookie.includes('affiliate_user_session')) {
-            // Simple cookie parsing
             const cookies = req.headers.cookie.split(';').reduce((acc, cookie) => {
                 const [key, value] = cookie.trim().split('=');
                 acc[key] = value;
@@ -60,28 +56,21 @@ export async function authenticateUser(req: Request, res: Response, next: NextFu
             const sessionCookie = cookies['affiliate_user_session'];
             if (sessionCookie) {
                 try {
-                    sessionData = JSON.parse(decodeURIComponent(sessionCookie));
+                    const sessionObj = JSON.parse(decodeURIComponent(sessionCookie));
+                    // If cookie also contains JWT, we should verify it
+                    if (sessionObj.token) {
+                        const decoded = Security.verifyToken(sessionObj.token);
+                        if (decoded) {
+                            req.user = { email: decoded.email, userId: decoded.userId };
+                            return next();
+                        }
+                    }
                 } catch (e) {
                     console.error('Failed to parse cookie', e);
                 }
             }
-        } else {
-            const userEmail = req.headers['x-user-email'] as string;
-            if (userEmail && userEmail.trim()) {
-                req.user = { email: userEmail.trim(), userId: userEmail.trim() };
-                return next();
-            }
         }
 
-        if (sessionData?.user?.email) {
-            req.user = {
-                email: sessionData.user.email,
-                userId: sessionData.user._id || sessionData.user.id
-            };
-            return next();
-        }
-
-        // Proceed without user if auth failed (routes can check req.user)
         next();
     } catch (error) {
         console.error('Error in auth middleware:', error);
@@ -94,4 +83,21 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
         return res.status(401).json({ error: 'Unauthorized' });
     }
     next();
+}
+
+export async function requireAdmin(req: Request, res: Response, next: NextFunction) {
+    if (!req.user) {
+        return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    try {
+        const user = await User.findByPk(req.user.userId);
+        if (!user || user.role !== 'admin') {
+            return res.status(403).json({ error: 'Forbidden: Admin access required' });
+        }
+        next();
+    } catch (error) {
+        console.error('Error in requireAdmin middleware:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
 }

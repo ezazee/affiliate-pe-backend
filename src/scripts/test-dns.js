@@ -1,6 +1,6 @@
 const dns = require('dns');
 
-const hosts = ['google.com', 'github.com', 'cluster0.hkfrbpr.mongodb.net'];
+const hosts = ['google.com', 'github.com'];
 
 console.log('🔍 Starting Network/DNS Diagnostics...');
 

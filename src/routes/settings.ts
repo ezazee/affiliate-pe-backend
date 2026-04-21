@@ -1,16 +1,12 @@
 import express from 'express';
-import clientPromise from '../config/database';
+import { Setting } from '../models';
 
 const router = express.Router();
 
 router.get('/', async (req, res) => {
     try {
-        const client = await clientPromise;
-        const db = client.db();
-
-        const settingsCollection = db.collection('settings');
-        const minimumWithdrawalSetting = await settingsCollection.findOne({ name: 'minimumWithdrawal' });
-        const adminWhatsAppSetting = await settingsCollection.findOne({ name: 'adminWhatsApp' });
+        const minimumWithdrawalSetting = await Setting.findOne({ where: { name: 'minimumWithdrawal' } });
+        const adminWhatsAppSetting = await Setting.findOne({ where: { name: 'adminWhatsApp' } });
 
         const minimumWithdrawalAmount = minimumWithdrawalSetting?.value || 50000;
         const adminWhatsApp = adminWhatsAppSetting?.value || '628123456789';
@@ -33,14 +29,7 @@ router.post('/', async (req, res) => {
             return res.status(400).json({ error: 'Missing required fields' });
         }
 
-        const client = await clientPromise;
-        const db = client.db();
-
-        await db.collection('settings').updateOne(
-            { name },
-            { $set: { name, value, updatedAt: new Date() } },
-            { upsert: true }
-        );
+        await Setting.upsert({ name, value });
 
         return res.json({ success: true, message: 'Setting updated successfully' });
     } catch (error) {

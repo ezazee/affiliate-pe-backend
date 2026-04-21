@@ -1,199 +1,135 @@
 import express from 'express';
-import clientPromise from '../config/database';
+import { biteshipService } from '../services/biteship';
+import { Order, Product } from '../models';
 
 const router = express.Router();
-const MAPBOX_API_KEY = process.env.MAPBOX_ACCESS_TOKEN || process.env.NEXT_PUBLIC_MAPBOX_API_KEY || 'pk.eyJ1IjoibXJ6c2FhIiwiYSI6ImNtaW1vM2ZpZTFvNW8zZG9jcmtwaXN0N2IifQ.Fyv7u5HxDjH6SInvE9gHqw';
 
-console.log('Shipping Route Loaded. Mapbox Key Configured:', !!MAPBOX_API_KEY);
-
-// A simple function to calculate shipping cost based on distance tiers
-const calculateCost = (distanceInKm: number, rates: any): { cost: number; rateApplied: number; policyDescription: string } => {
-    const { short_rate, medium_rate, long_rate, long_flat_rate } = rates;
-    let cost = 0;
-    let rateApplied = 0;
-    let policyDescription = '';
-
-    if (distanceInKm < 20) {
-        cost = distanceInKm * short_rate;
-        rateApplied = short_rate;
-        policyDescription = `Berdasarkan jarak kurang dari 20 km (Dalam kota / dekat), biaya Rp ${short_rate.toLocaleString('id-ID')} per km diterapkan.`;
-    } else if (distanceInKm >= 20 && distanceInKm <= 150) {
-        cost = distanceInKm * medium_rate;
-        rateApplied = medium_rate;
-        policyDescription = `Berdasarkan jarak 20-150 km (Antar kota / jarak menengah), biaya Rp ${medium_rate.toLocaleString('id-ID')} per km diterapkan.`;
-    } else {
-        // Note: Original logic: flat + (dist * rate). 
-        cost = long_flat_rate + (distanceInKm * long_rate);
-        rateApplied = long_rate;
-        policyDescription = `Berdasarkan jarak lebih dari 150 km (Jauh / lintas pulau), biaya flat Rp ${long_flat_rate.toLocaleString('id-ID')} ditambah Rp ${long_rate.toLocaleString('id-ID')} per km diterapkan.`;
-    }
-    return { cost, rateApplied, policyDescription };
-};
-
-// Geocode an address using Mapbox
-const geocodeAddress = async (address: string): Promise<{ lon: number; lat: number; place_name: string }> => {
-    // Increase limit to find better matches if the first one is too generic
-    const response = await fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(address)}.json?access_token=${MAPBOX_API_KEY}&limit=5&country=ID`);
-    const data = await response.json();
-    if (!data.features || data.features.length === 0) {
-        throw new Error('Address not found.');
+/**
+ * GET /api/v1/shipping/areas
+ * Mencari Area ID untuk autocomplete lokasi di frontend
+ */
+router.get('/areas', async (req, res) => {
+  try {
+    const { input } = req.query;
+    if (!input || typeof input !== 'string') {
+      return res.status(400).json({ error: 'Input pencarian diperlukan.' });
     }
 
-    // Priority order for place types
-    const typePriority: { [key: string]: number } = {
-        'address': 1,
-        'poi': 2,
-        'neighborhood': 3,
-        'locality': 4,
-        'place': 5,
-        'region': 6,
-        'country': 7
-    };
+    const areas = await biteshipService.searchAreas(input);
+    res.json(areas);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
-    // Sort features by priority
-    const features = data.features.sort((a: any, b: any) => {
-        const typeA = a.place_type[0];
-        const typeB = b.place_type[0];
-        const priorityA = typePriority[typeA] || 99;
-        const priorityB = typePriority[typeB] || 99;
+/**
+ * POST /api/v1/shipping/rates
+ * Mendapatkan daftar harga kurir berdasarkan Area ID
+ */
+router.post('/rates', async (req, res) => {
+  try {
+    const { destination_area_id, productId, quantity = 1, province, city, district } = req.body;
 
-        // If priority is different, lower number wins (more specific)
-        if (priorityA !== priorityB) {
-            return priorityA - priorityB;
-        }
-        // If same priority, trust Mapbox relevance
-        return b.relevance - a.relevance;
+    let finalAreaId = destination_area_id;
+
+    // Resolve Area ID from text if not provided (for manual forms)
+    if (!finalAreaId && district && city) {
+      const searchQuery = `${district}, ${city}`;
+      const areas = await biteshipService.searchAreas(searchQuery);
+      if (areas && areas.length > 0) {
+        // Find the best match (level 3 name should match district)
+        const match = areas.find((a: any) => 
+          a.administrative_division_level_3_name.toLowerCase().includes(district.toLowerCase())
+        ) || areas[0];
+        finalAreaId = match.id;
+      }
+    }
+
+    if (!finalAreaId || !productId) {
+      return res.status(400).json({ error: 'Data lokasi tidak lengkap (Pilih kecamatan yang benar).' });
+    }
+
+    // Ambil data produk untuk mendapatkan berat
+    const product = await Product.findByPk(productId);
+    if (!product) {
+      return res.status(404).json({ error: 'Produk tidak ditemukan.' });
+    }
+
+    const items = [
+      {
+        name: product.name,
+        description: product.description || '',
+        value: Number(product.price),
+        weight: product.weight || 500, // Default 500g jika belum diisi
+        quantity: quantity
+      }
+    ];
+
+    const pricing = await biteshipService.getRates(finalAreaId, items);
+    res.json({ rates: pricing, resolvedAreaId: finalAreaId });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/v1/shipping/webhook
+ * Menerima update status otomatis dari Biteship
+ */
+router.post('/webhook', async (req, res) => {
+  try {
+    const payload = req.body;
+    
+    // Biteship menyertakan order_id atau shipment_id di payload mereka
+    // Bergantung pada apakah kita menggunakan sistem Biteship Order atau Shipment
+    const { id: biteshipShipmentId, status, tracking_id } = payload;
+
+    if (!biteshipShipmentId) {
+      return res.status(400).json({ error: 'Invalid payload' });
+    }
+
+    // Cari order berdasarkan biteshipShipmentId
+    const order = await Order.findOne({
+      where: { biteshipShipmentId: biteshipShipmentId }
     });
 
-    const selectedFeature = features[0];
-    const [lon, lat] = selectedFeature.center;
-    return { lon, lat, place_name: selectedFeature.place_name };
-};
-
-interface ShippingSettings {
-    warehouseAddress?: string;
-    short_rate?: number;
-    medium_rate?: number;
-    long_rate?: number;
-    long_flat_rate?: number;
-}
-
-router.post('/', async (req, res) => {
-    if (!MAPBOX_API_KEY) {
-        return res.status(500).json({ error: 'Mapbox API key is not configured' });
+    if (!order) {
+      console.warn(`Webhook received for unknown shipment ID: ${biteshipShipmentId}`);
+      return res.status(404).json({ error: 'Order not found' });
     }
 
-    try {
-        const { shippingAddress, district, city, province, postalCode } = req.body;
+    // Mapping status Biteship ke status internal kita
+    // Status potensial Biteship: picked, in_transit, delivered, returned, cancelled
+    let internalStatus = order.status;
 
-        // Intelligent Address Construction
-        // If the shippingAddress is from autocomplete, it likely contains the full context.
-        // We check if it seems "complete" to avoid duplicating context which confuses Mapbox.
-        let fullAddress = shippingAddress;
-
-        const lowerAddr = shippingAddress.toLowerCase();
-        const lowerCity = (city || '').toLowerCase();
-        const lowerProv = (province || '').toLowerCase();
-
-        // Simple heuristic: If address doesn't contain the city name (or part of it) AND doesn't contain the postal code, append details.
-        // We strip "KOTA" or "KABUPATEN" from city for fuzzy matching
-        const cleanCity = lowerCity.replace('kota ', '').replace('kabupaten ', '');
-        const hasCity = lowerAddr.includes(cleanCity);
-        const hasPostal = postalCode && shippingAddress.includes(postalCode);
-
-        if (!hasCity && !hasPostal) {
-            fullAddress = `${shippingAddress}, ${district}, ${city}, ${province}, ${postalCode}`;
-        }
-        // If it has city or postal, we trust shippingAddress is sufficient/better as is.
-        // Maybe append Indonesia just in case
-        if (!lowerAddr.includes('indonesia')) {
-            fullAddress += ', Indonesia';
-        }
-
-        // Fetch settings
-        const client = await clientPromise;
-        const db = client.db();
-        const settingsCursor = db.collection('settings').find({
-            name: { $in: ['warehouseAddress', 'short_rate', 'medium_rate', 'long_rate', 'long_flat_rate'] }
-        });
-        const settingsArray = await settingsCursor.toArray();
-        const settings = settingsArray.reduce<any>((acc, setting) => {
-            acc[setting.name] = setting.value;
-            return acc;
-        }, {});
-
-        const { warehouseAddress, short_rate, medium_rate, long_rate, long_flat_rate } = settings;
-
-        // Validate settings
-        const missingSettings = [];
-        if (!warehouseAddress) missingSettings.push('Warehouse Address');
-        if (short_rate === undefined) missingSettings.push('Short Distance Rate');
-        if (medium_rate === undefined) missingSettings.push('Medium Distance Rate');
-        if (long_rate === undefined) missingSettings.push('Long Distance Rate');
-        if (long_flat_rate === undefined) missingSettings.push('Long Distance Flat Rate');
-
-        if (missingSettings.length > 0) {
-            const error_message = `The following required settings are missing: ${missingSettings.join(', ')}. Please configure them in the admin settings.`;
-            return res.status(500).json({ error: error_message });
-        }
-
-        let originCoords;
-        let destinationCoords;
-
-        try {
-            originCoords = await geocodeAddress(warehouseAddress);
-        } catch (e) {
-            return res.status(400).json({ error: `The configured warehouse address ('${warehouseAddress}') could not be found.` });
-        }
-
-        try {
-            destinationCoords = await geocodeAddress(fullAddress);
-        } catch (e) {
-            return res.status(400).json({ error: `The shipping destination address ('${fullAddress}') could not be found.` });
-        }
-
-        // Mapbox Directions API with alternatives to find the shortest path
-        const directionsResponse = await fetch(`https://api.mapbox.com/directions/v5/mapbox/driving/${originCoords.lon},${originCoords.lat};${destinationCoords.lon},${destinationCoords.lat}?access_token=${MAPBOX_API_KEY}&alternatives=true&geometries=geojson`);
-
-        if (!directionsResponse.ok) {
-            return res.status(502).json({ error: `Mapbox Directions API request failed.` });
-        }
-
-        const directionsData = await directionsResponse.json();
-
-        if (directionsData.code !== 'Ok' || !directionsData.routes || directionsData.routes.length === 0) {
-            return res.status(400).json({ error: "A shipping route could not be calculated." });
-        }
-
-        // Find the route with the shortest distance
-        const routes = directionsData.routes;
-        let shortestRoute = routes[0];
-        for (const route of routes) {
-            if (route.distance < shortestRoute.distance) {
-                shortestRoute = route;
-            }
-        }
-
-        const distanceInMeters = shortestRoute.distance;
-        const distanceInKm = distanceInMeters / 1000;
-
-        const { cost: shippingCost, policyDescription } = calculateCost(distanceInKm, { short_rate, medium_rate, long_rate, long_flat_rate });
-
-        return res.json({
-            shippingCost: Math.round(shippingCost),
-            distanceInKm: Math.round(distanceInKm * 100) / 100,
-            appliedRateDetails: policyDescription,
-            debug: {
-                origin: originCoords.place_name,
-                destination: destinationCoords.place_name,
-                routesFound: routes.length
-            }
-        });
-
-    } catch (error: any) {
-        console.error('Shipping calc error', error);
-        return res.status(500).json({ error: error.message || 'Failed to calculate shipping cost' });
+    switch (status) {
+      case 'picked':
+      case 'in_transit':
+        internalStatus = 'shipping';
+        break;
+      case 'delivered':
+        internalStatus = 'delivered';
+        break;
+      case 'cancelled':
+      case 'returned':
+        internalStatus = 'cancelled';
+        break;
     }
+
+    // Update order
+    await order.update({
+      status: internalStatus,
+      biteshipTrackingStatus: status,
+      trackingNumber: tracking_id || order.trackingNumber
+    });
+
+    console.log(`Order ${order.orderNumber} updated via webhook to ${internalStatus} (${status})`);
+    
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('Webhook Error:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 export default router;

@@ -1,10 +1,9 @@
-import { ObjectId } from 'mongodb';
 import { Product } from './product';
 
-export type OrderStatus = 'pending' | 'paid' | 'cancelled' | 'shipping';
+export type OrderStatus = 'pending' | 'paid' | 'cancelled' | 'shipping' | 'delivered';
 
 export interface Order {
-    _id?: ObjectId | string;
+    _id?: any;
     id?: string;
     orderNumber?: string;
     paymentToken?: string;
@@ -12,6 +11,7 @@ export interface Order {
     isPaymentUsed?: boolean; // New field for single-use functionality
     buyerName: string;
     buyerPhone: string;
+    buyerEmail: string;
     shippingAddress: string;
     district?: string;
     city: string;
@@ -22,6 +22,12 @@ export interface Order {
     affiliateCode: string;
     affiliateName: string;
     status: OrderStatus;
+    destinationAreaId?: string;
+    courierName?: string;
+    courierService?: string;
+    trackingNumber?: string;
+    biteshipShipmentId?: string;
+    biteshipTrackingStatus?: string;
     shippingCost?: number;
     totalPrice?: number;
     commission?: number;
@@ -29,6 +35,7 @@ export interface Order {
     orderNote?: string;
     paymentProof?: string;
     createdAt: Date;
+    updatedAt: Date;
     product?: Product;
     productName?: string;
     productPrice?: number;

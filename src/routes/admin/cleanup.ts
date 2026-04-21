@@ -1,5 +1,6 @@
 import express from 'express';
-import clientPromise from '../../config/database';
+import { AffiliateLink, Commission, Order, Withdrawal, User, Setting } from '../../models';
+import { Op } from 'sequelize';
 
 const router = express.Router();
 
@@ -10,36 +11,30 @@ const router = express.Router();
  *   post:
  *     summary: Cleanup database (Dev/Test only)
  *     tags: [Admin]
- *     responses:
- *       200:
- *         description: Cleanup results
  */
 router.post('/', async (req, res) => {
     try {
-        const client = await clientPromise;
-        const db = client.db();
-
-        const linksResult = await db.collection('affiliateLinks').deleteMany({});
-        const commissionsResult = await db.collection('commissions').deleteMany({});
-        const ordersResult = await db.collection('orders').deleteMany({});
-        const withdrawalsResult = await db.collection('withdrawals').deleteMany({});
+        const linksDeleted = await AffiliateLink.destroy({ where: {}, truncate: false });
+        const commissionsDeleted = await Commission.destroy({ where: {}, truncate: false });
+        const ordersDeleted = await Order.destroy({ where: {}, truncate: false });
+        const withdrawalsDeleted = await Withdrawal.destroy({ where: {}, truncate: false });
 
         const testUserEmails = ['alice@example.com', 'bob@example.com', 'newuser@test.com'];
-        const usersResult = await db.collection('users').deleteMany({
-            email: { $in: testUserEmails }
+        const usersDeleted = await User.destroy({
+            where: {
+                email: { [Op.in]: testUserEmails }
+            }
         });
 
-        await db.collection('settings').deleteMany({});
-        await db.collection('settings').insertMany([
-            { name: 'minimumWithdrawal', value: 50000, createdAt: new Date() }
-        ]);
+        await Setting.destroy({ where: {} });
+        await Setting.create({ name: 'minimumWithdrawal', value: 50000 });
 
         const results = {
-            affiliateLinks: linksResult.deletedCount,
-            commissions: commissionsResult.deletedCount,
-            orders: ordersResult.deletedCount,
-            withdrawals: withdrawalsResult.deletedCount,
-            users: usersResult.deletedCount,
+            affiliateLinks: linksDeleted,
+            commissions: commissionsDeleted,
+            orders: ordersDeleted,
+            withdrawals: withdrawalsDeleted,
+            users: usersDeleted,
             settingsReset: true
         };
 

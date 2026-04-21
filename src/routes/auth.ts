@@ -1,11 +1,11 @@
 import express from 'express';
-import clientPromise from '../config/database';
-import { User } from '../types/user';
-import { ObjectId } from 'mongodb';
+import { User } from '../models';
 import { adminNotifications } from '../services/notification-service';
 import { v4 as uuidv4 } from 'uuid';
 import { Security } from '../lib/security';
 import { EmailService } from '../services/email-service';
+import { authenticateUser } from '../middleware/auth';
+import { Op } from 'sequelize';
 
 const router = express.Router();
 
@@ -13,7 +13,7 @@ const router = express.Router();
 const generateReferralCode = (length: number = 8): string => {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     let code = '';
-    for (let i = 0; i < length; i++) {
+    for (const i of Array(length)) {
         code += chars.charAt(Math.floor(Math.random() * chars.length));
     }
     return code;
@@ -73,18 +73,15 @@ const generateReferralCode = (length: number = 8): string => {
 router.post('/login', async (req, res) => {
     try {
         const { email, password } = req.body;
-        const client = await clientPromise;
-        const db = client.db();
 
-        // Find user by EMAIL only (since password might be hashed or plain)
-        const user = await db.collection<User>('users').findOne({ email });
+        // Find user by EMAIL only
+        const user = await User.findOne({ where: { email } });
 
         if (user) {
             let isValidPassword = false;
             let needsMigration = false;
 
             // 1. Try comparing as Hash (New Standard)
-            // If password field starts with $2a$ or $2b$, it's likely a bcrypt hash
             if (user.password && (user.password.startsWith('$2a$') || user.password.startsWith('$2b$'))) {
                 isValidPassword = await Security.comparePassword(password, user.password);
             } else {
@@ -99,26 +96,27 @@ router.post('/login', async (req, res) => {
                 // Auto-migrate legacy password to hash
                 if (needsMigration) {
                     const hashedPassword = await Security.hashPassword(password);
-                    await db.collection('users').updateOne(
-                        { _id: user._id },
-                        { $set: { password: hashedPassword } }
-                    );
+                    await user.update({ password: hashedPassword });
                     console.log(`[AUTH] Migrated password for user ${email} to hash.`);
                 }
 
                 if (!user.referralCode) {
                     const referralCode = generateReferralCode();
                     const registrationNumber = `REG-${referralCode}`;
-                    await db.collection('users').updateOne(
-                        { _id: user._id },
-                        { $set: { referralCode: referralCode, registrationNumber: registrationNumber } }
-                    );
-                    user.referralCode = referralCode;
-                    user.registrationNumber = registrationNumber;
+                    await user.update({ referralCode, registrationNumber });
                 }
 
-                const { password: _, ...userWithoutPassword } = user;
-                return res.json({ user: userWithoutPassword });
+                const token = Security.generateToken({
+                    email: user.email,
+                    userId: user.id
+                });
+
+                const userJson = user.toJSON();
+                delete userJson.password;
+                return res.json({ 
+                    user: userJson,
+                    token: token
+                });
             }
         }
 
@@ -184,10 +182,7 @@ router.post('/register', async (req, res) => {
             return res.status(400).json({ error: 'Missing required fields' });
         }
 
-        const client = await clientPromise;
-        const db = client.db();
-
-        const existingUser = await db.collection('users').findOne({ email });
+        const existingUser = await User.findOne({ where: { email } });
         if (existingUser) {
             return res.status(400).json({ error: 'User already exists' });
         }
@@ -198,133 +193,76 @@ router.post('/register', async (req, res) => {
         // Hash Password
         const hashedPassword = await Security.hashPassword(password);
 
-        const userToInsert: any = { // Use any to bypass TS strict check on _id for now during insert
+        const createdUser = await User.create({
             name,
             email,
-            password: hashedPassword, // Save Hashed Password
-            phone, // Added phone number
+            password: hashedPassword,
+            phone,
             role: 'affiliator',
             status: 'pending',
             referralCode,
             registrationNumber,
             createdAt: new Date(),
-        };
+            updatedAt: new Date()
+        });
 
-        const result = await db.collection('users').insertOne(userToInsert);
-        const createdUser = { ...userToInsert, _id: result.insertedId, id: result.insertedId.toString() };
+        const userJson = createdUser.toJSON();
+        delete userJson.password;
 
         // Send notifications about new affiliator registration
         try {
-            // Push notification & In-app to admins
             await adminNotifications.newAffiliator(name, email);
         } catch (notificationError) {
             console.error('❌ Failed to send notifications to admins:', notificationError);
-            // Continue with registration even if notification fails
         }
 
-        return res.json({ user: createdUser });
+        const token = Security.generateToken({
+            email: createdUser.email,
+            userId: createdUser.id
+        });
+
+        return res.json({ 
+            user: userJson,
+            token: token
+        });
     } catch (error) {
         console.error('Register API error:', error);
         return res.status(500).json({ error: 'Something went wrong' });
     }
 });
 
-// POST /auth/logout
-/**
- * @swagger
- * /auth/logout:
- *   post:
- *     summary: Logout user
- *     tags: [Auth]
- *     responses:
- *       200:
- *         description: Logout successful
- */
 router.post('/logout', async (req, res) => {
-    // For stateless authentication (JWT/Session), logout is often client-side.
-    // We provide this endpoint for logging or cookie clearing if we move to httpOnly cookies.
     return res.json({ success: true, message: 'Logout successful' });
 });
 
-// POST /auth/verify
-/**
- * @swagger
- * /auth/verify:
- *   post:
- *     summary: Verify user session
- *     tags: [Auth]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - userId
- *             properties:
- *               userId:
- *                 type: string
- *     responses:
- *       200:
- *         description: Session valid
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 valid:
- *                   type: boolean
- */
-router.post('/verify', async (req, res) => {
+router.post('/verify', authenticateUser, async (req, res) => {
     try {
-        const { userId } = req.body;
-        if (!userId) {
-            return res.status(400).json({ error: 'User ID is required' });
+        // req.user is populated by authenticateUser if token is valid
+        if (!req.user) {
+            return res.json({ valid: false, error: 'Invalid or missing token' });
         }
 
-        const client = await clientPromise;
-        const db = client.db();
-
-        // Check ObjectId validity if using ObjectId
-        if (!ObjectId.isValid(userId)) {
-            return res.json({ valid: false });
+        const user = await User.findByPk(req.user.userId);
+        if (!user) {
+            return res.json({ valid: false, error: 'User not found' });
         }
 
-        const user = await db.collection('users').findOne({ _id: new ObjectId(userId) });
-
-        if (user) {
-            return res.json({ valid: true });
-        } else {
-            return res.json({ valid: false });
-        }
+        return res.json({ 
+            valid: true, 
+            user: {
+                id: user.id,
+                email: user.email,
+                name: user.name,
+                role: user.role,
+                status: user.status
+            } 
+        });
     } catch (error) {
         console.error('Verify session API error:', error);
         return res.status(500).json({ error: 'Something went wrong' });
     }
 });
 
-
-/**
- * @swagger
- * /auth/forgot-password:
- *   post:
- *     summary: Request password reset
- *     tags: [Auth]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - email
- *             properties:
- *               email:
- *                 type: string
- *     responses:
- *       200:
- *         description: Reset email sent (if email exists)
- */
 router.post('/forgot-password', async (req, res) => {
     try {
         const { email } = req.body;
@@ -332,39 +270,24 @@ router.post('/forgot-password', async (req, res) => {
             return res.status(400).json({ error: 'Email is required' });
         }
 
-        const client = await clientPromise;
-        const db = client.db();
-
-        const user = await db.collection('users').findOne({ email });
+        const user = await User.findOne({ where: { email } });
 
         if (!user) {
-            // As requested: Explicitly tell if email is not registered
             return res.status(404).json({ error: 'Email tidak terdaftar' });
         }
 
-        // Generate reset token
         const resetToken = Security.generateResetToken();
         const hashedToken = Security.hashToken(resetToken);
-        const resetExpires = Date.now() + 1800000; // 30 minutes
+        const resetExpires = new Date(Date.now() + 1800000); // 30 minutes
 
-        // Save hashed token to DB
-        await db.collection('users').updateOne(
-            { _id: user._id },
-            {
-                $set: {
-                    resetPasswordToken: hashedToken,
-                    resetPasswordExpires: resetExpires
-                }
-            }
-        );
+        await user.update({
+            resetPasswordToken: hashedToken,
+            resetPasswordExpires: resetExpires
+        });
 
-        // Construct Request URL (Frontend URL)
-        // Typically this should be an env variable like FRONTEND_URL, but falling back to origin for now
-        // Assuming Frontend runs on localhost:3000 for dev or configured PROD URL
         const frontendUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
         const resetUrl = `${frontendUrl}/reset-password/${resetToken}`;
 
-        // Send Email with UNHASHED token
         const emailSent = await EmailService.sendPasswordResetEmail(email, resetUrl);
 
         if (emailSent) {
@@ -379,32 +302,6 @@ router.post('/forgot-password', async (req, res) => {
     }
 });
 
-/**
- * @swagger
- * /auth/reset-password:
- *   post:
- *     summary: Reset password with token
- *     tags: [Auth]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - token
- *               - newPassword
- *             properties:
- *               token:
- *                 type: string
- *               newPassword:
- *                 type: string
- *     responses:
- *       200:
- *         description: Password reset successful
- *       400:
- *         description: Invalid or expired token
- */
 router.post('/reset-password', async (req, res) => {
     try {
         const { token, newPassword } = req.body;
@@ -413,59 +310,26 @@ router.post('/reset-password', async (req, res) => {
             return res.status(400).json({ error: 'Token and new password are required' });
         }
 
-        // Hash the incoming token to compare with storage
         const hashedToken = Security.hashToken(token);
 
-        const client = await clientPromise;
-        const db = client.db();
-
-        const user = await db.collection('users').findOne({
-            resetPasswordToken: hashedToken,
-            resetPasswordExpires: { $gt: Date.now() }
+        const user = await User.findOne({
+            where: {
+                resetPasswordToken: hashedToken,
+                resetPasswordExpires: { [Op.gt]: new Date() }
+            }
         });
 
         if (!user) {
             return res.status(400).json({ error: 'Password reset token is invalid or has expired.' });
         }
 
-        // Hash new password
-        // Normally we'd use Security.hashPassword(newPassword) here
-        // BUT current login implementation uses PLAIN TEXT (checked in previous steps: findOne({ email, password }))
-        // To maintain compatibility with existing login, we must use plain text OR upgrade login.
-        // User requested "secure password reset" and implied upgrading security.
-        // However, if I hash it here, the current Login flow `findOne({ email, password })` will FAIL for this user.
-        // I MUST UPDATE LOGIN TO SUPPORT HASHED PASSWORDS TOO or fallback.
-        // Decision: I will save as PLAIN TEXT for now to strictly follow "Don't break existing function" unless explicit.
-        // WAIT, user explicitly asked: "di-hash sebelum disimpan" (token hashed), but for password: "mengirim token serta password baru ke backend".
-        // Actually, standard practice is to hash password.
-        // Let's look at the Login route again. It is `db.collection('users').findOne({ email, password });`
-        // If I hash the password here, the user won't be able to login.
-        // I'll stick to PLAIN TEXT for password to ensure login works, UNLESS I upgrade login too.
-        // User prompt: "Buat sistem reset password yang aman... token acak, di-hash...".
-        // It didn't explicitly demand hashing the PASSWORD itself, but "secure" implies it.
-        // Given the constraint "JANGAN SAMPAI MENGUBAH FUNGSI NYA" from previous request, modifying Login might be risky.
-        // However, I can't claim "secure" with plain text passwords.
-        // I will use PLAIN TEXT for password Update to match existing Login, BUT I will leave a TODO or
-        // implement a check in Login to support both if I were really ambitious.
-        // For now, to satisfy the specific "Reset Password" request without breaking Login:
-        // I will save the password directly.
-        // RE-READING PROMPT: "secure password reset system... token reset (random, hashed...)" -> refers to TOKEN.
-        // Logic: Token IS hashed. Password... "send new password to backend".
-        // I will store the password AS IS to be compatible with `auth.ts:findOne({ email, password })`.
-
-        // UPDATE: I can't leave it insecure. But I can't break login.
-        // I will just save `newPassword` directly.
-
-        // Hash new password
         const hashedPassword = await Security.hashPassword(newPassword);
 
-        await db.collection('users').updateOne(
-            { _id: user._id },
-            {
-                $set: { password: hashedPassword },
-                $unset: { resetPasswordToken: "", resetPasswordExpires: "" }
-            }
-        );
+        await user.update({
+            password: hashedPassword,
+            resetPasswordToken: null,
+            resetPasswordExpires: null
+        });
 
         return res.json({ message: 'Password has been reset successfully.' });
 

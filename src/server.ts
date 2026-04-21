@@ -1,3 +1,6 @@
+import dotenv from 'dotenv';
+dotenv.config();
+
 import express from 'express';
 import cors from 'cors';
 import authRoutes from './routes/auth';
@@ -13,6 +16,7 @@ import autocompleteRoutes from './routes/autocomplete';
 import adminRoutes from './routes/admin';
 import checkoutRoutes from './routes/checkout';
 import paymentDetailsRoutes from './routes/payment-details';
+import paymentRoutes from './routes/payment';
 import placeDetailsRoutes from './routes/place-details';
 import notificationRoutes from './routes/notifications';
 import publicRoutes from './routes/public';
@@ -21,18 +25,26 @@ import webRoutes from './routes/web';
 import { authenticateUser } from './middleware/auth';
 import swaggerUi from 'swagger-ui-express';
 import { specs } from './config/swagger';
-import dotenv from 'dotenv';
+import db from './config/database';
 
-// Load env vars
-dotenv.config(); // Load from .env in current directory by default
 
 const app = express();
 const port = process.env.PORT || 3001;
 
-// Middleware
-app.use(cors());
+// Middleware Dasar
+// Konfigurasi CORS: Batasi akses hanya dari alamat Frontend yang diizinkan di .env
+app.use(cors({
+    origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+    credentials: true
+}));
+
+// WEBHOOK ROUTES: Harus di Atas express.json() agar raw body tidak berubah
+app.use('/api/payment', paymentRoutes);
+
+// Global Body Parser (Hanya untuk route di bawahnya)
 app.use(express.json());
-// Use CDN for Swagger UI assets to avoid static file serving issues in Vercel
+
+// Use CDN for Swagger UI assets
 const swaggerOptions = {
     customCssUrl: 'https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/5.0.0/swagger-ui.min.css',
     customJs: [
@@ -43,73 +55,73 @@ const swaggerOptions = {
 
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs, swaggerOptions));
 
-// DB Connection Check Middleware
-import clientPromise, { connectionError } from './config/database';
+// DB Connection Check Middleware (Sequelize)
 app.use(async (req, res, next) => {
-    // Skip for Swagger assets to ensure docs always load
     if (req.path.startsWith('/api-docs')) return next();
 
     try {
-        const client = await clientPromise;
-        if (!client) {
-            return res.status(503).json({
-                error: 'Service Unavailable: Database Connection Failed',
-                details: connectionError ? connectionError.message : 'Unknown Connection Error'
-            });
-        }
+        await db.authenticate();
         next();
     } catch (err) {
-        // Should match the catch in database.ts, but just in case
+        console.error('❌ Database connection error:', err);
         return res.status(503).json({
-            error: 'Service Unavailable: Database Error',
-            details: err instanceof Error ? err.message : String(err)
+            error: 'Service Unavailable: Database Connection Failed',
+            details: err instanceof Error ? err.message : 'Unknown Database Error'
         });
     }
 });
 
-app.use(authenticateUser); // Global auth middleware (populates req.user if token present)
-
-// Routes
-// Mount auth routes at /api/auth to match Next.js structure
+// --- PUBLIC ROUTES (No Authentication Needed) ---
 app.use('/api/auth', authRoutes);
+app.use('/api/public', publicRoutes);
+app.use('/api/web', webRoutes);
+app.use('/api/track-click', trackingRoutes);
+app.use('/api/autocomplete-address', autocompleteRoutes);
+app.use('/api/place-details', placeDetailsRoutes);
+
+// --- AUTHENTICATION MIDDLEWARE ---
+// Populates req.user if token is present, but doesn't block access
+app.use(authenticateUser);
+
+// --- PROTECTED ROUTES (Populates req.user) ---
 app.use('/api/products', productRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/affiliator', affiliatorRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/push', pushRoutes);
-app.use('/api/track-click', trackingRoutes);
-app.use('/api/calculate-shipping', shippingRoutes);
+app.use('/api/shipping', shippingRoutes);
 app.use('/api/settings', settingsRoutes);
-app.use('/api/autocomplete-address', autocompleteRoutes);
-// New Routes
 app.use('/api/checkout', checkoutRoutes);
 app.use('/api/payment-details', paymentDetailsRoutes);
-app.use('/api/place-details', placeDetailsRoutes);
-app.use('/api/place-details', placeDetailsRoutes);
 app.use('/api/notifications', notificationRoutes);
-app.use('/api/public', publicRoutes);
 app.use('/api/user', userRoutes);
-app.use('/api/web', webRoutes); // Mount web routes for legacy compatibility
 app.use('/api/admin', adminRoutes);
-
-
 
 // Root route
 app.get('/', (req, res) => {
-    res.send('Affiliate Growth Hub Backend is running. Documentation available at <a href="/api-docs">/api-docs</a>');
+    res.send('Affiliate Growth Hub Backend (PostgreSQL) is running. Documentation available at <a href="/api-docs">/api-docs</a>');
 });
 
 // Health check
 app.get('/health', (req, res) => {
-    res.json({ status: 'ok', time: new Date() });
+    res.json({ status: 'ok', database: 'connected', time: new Date() });
 });
 
-// Start server
-app.listen(port, () => {
-    console.log(`Server running on port ${port}`);
+// Sync database and Start server
+const startServer = async () => {
+    try {
+        // Only alter structure in development or when explicitly requested
+        const shouldAlter = process.env.NODE_ENV !== 'production' || process.env.DB_SYNC_ALTER === 'true';
+        await db.sync({ alter: shouldAlter });
+        console.log(`📡 Database synced (alter: ${shouldAlter})`);
 
-    // Log database connection info for debugging
-    const dbUri = process.env.MONGODB_URI || 'undefined';
-    const maskedUri = dbUri.replace(/:([^:@]+)@/, ':****@');
-    console.log(`Connecting to MongoDB: ${maskedUri}`);
-});
+        app.listen(port, () => {
+            console.log(`🚀 Server running on port ${port} in ${process.env.NODE_ENV || 'development'} mode`);
+        });
+    } catch (error) {
+        console.error('❌ Failed to start server:', error);
+        process.exit(1);
+    }
+};
+
+startServer();

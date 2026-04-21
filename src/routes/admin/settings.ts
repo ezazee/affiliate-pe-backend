@@ -1,5 +1,5 @@
 import express from 'express';
-import clientPromise from '../../config/database';
+import { Setting } from '../../models';
 
 const router = express.Router();
 
@@ -15,10 +15,7 @@ const router = express.Router();
  */
 router.get('/', async (req, res) => {
     try {
-        const client = await clientPromise;
-        const db = client.db();
-        const settingsCursor = db.collection('settings').find({});
-        const settingsArray = await settingsCursor.toArray();
+        const settingsArray = await Setting.findAll();
 
         const settings = settingsArray.reduce((acc, setting) => {
             acc[setting.name] = setting.value;
@@ -59,14 +56,7 @@ router.post('/', async (req, res) => {
             return res.status(400).json({ error: 'Invalid setting format. "name" and "value" are required.' });
         }
 
-        const client = await clientPromise;
-        const db = client.db();
-
-        await db.collection('settings').updateOne(
-            { name: name },
-            { $set: { name, value } },
-            { upsert: true }
-        );
+        await Setting.upsert({ name, value });
 
         return res.json({ message: `Setting '${name}' updated successfully` });
     } catch (error) {

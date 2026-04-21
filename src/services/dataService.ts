@@ -1,39 +1,39 @@
-import clientPromise from '../config/database';
-import { Product, User, AffiliateLink } from '../types';
-import { ObjectId } from 'mongodb';
+import { Product, User, AffiliateLink } from '../models';
+import { Op } from 'sequelize';
 
-export const getProductBySlug = async (slug: string): Promise<Product | null> => {
-    const client = await clientPromise;
-    const db = client.db();
-    const product = await db.collection<Product>('products').findOne({ slug });
-    if (product) {
-        return { ...product, id: product._id.toString() };
+export const getProductBySlug = async (slugOrId: string): Promise<Product | null> => {
+    // Try by slug first
+    let product = await Product.findOne({ where: { slug: slugOrId } });
+    
+    // Fallback to ID/UUID if not found by slug
+    if (!product && slugOrId) {
+        // Check if it's a valid UUID or Integer
+        const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(slugOrId);
+        const isInt = /^\d+$/.test(slugOrId);
+        
+        if (isUUID || isInt) {
+            product = await Product.findOne({
+                where: {
+                    [Op.or]: [{ id: slugOrId }, { _id: slugOrId }]
+                }
+            });
+        }
     }
-    return null;
+    
+    return product;
 };
 
 export const getUserByReferralCode = async (referralCode: string): Promise<User | null> => {
-    const client = await clientPromise;
-    const db = client.db();
-    const user = await db.collection<User>('users').findOne({ referralCode });
-    if (user) {
-        return { ...user, id: user._id.toString() };
-    }
-    return null;
+    return await User.findOne({ where: { referralCode } });
 };
 
 export const getAffiliateLinkByAffiliatorProduct = async (affiliatorId: string, productId: string): Promise<AffiliateLink | null> => {
-    const client = await clientPromise;
-    const db = client.db();
-
-    // Check various ID formats if needed, but assuming canonical string for now based on other code
-    const link = await db.collection<AffiliateLink>('affiliateLinks').findOne({
-        affiliatorId,
-        productId // Canonical string ID usually
+    return await AffiliateLink.findOne({
+        where: {
+            [Op.and]: [
+                { [Op.or]: [{ affiliatorId: affiliatorId }, { _id: affiliatorId }] },
+                { [Op.or]: [{ productId: productId }, { _id: productId }] }
+            ]
+        }
     });
-
-    if (link) {
-        return { ...link, id: link._id?.toString() };
-    }
-    return null;
 };

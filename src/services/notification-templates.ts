@@ -115,10 +115,10 @@ export const notificationTemplates: NotificationTemplate[] = [
     },
     {
         id: 'withdrawal_approved',
-        name: 'Penarikan Di Approve',
-        description: 'Notifikasi ketika penarikan disetujui',
-        defaultTitle: '✅ Penarikan Disetujui',
-        defaultBody: 'Penarikan dana Rp{amount} telah disetujui dan diproses',
+        name: 'Penarikan Sedang Diproses',
+        description: 'Notifikasi ketika penarikan sedang diproses oleh admin',
+        defaultTitle: '⚙️ Penarikan Sedang Diproses',
+        defaultBody: 'Penarikan dana Rp{amount} Anda sedang dalam proses transfer oleh tim kami.',
         defaultUrl: '/affiliator/commissions',
         roles: ['affiliator'],
         category: 'withdrawal'

@@ -1,5 +1,5 @@
 import express from 'express';
-import clientPromise from '../../config/database';
+import { User } from '../../models';
 import { authenticateUser, requireAuth } from '../../middleware/auth';
 
 const router = express.Router();
@@ -10,24 +10,10 @@ const router = express.Router();
  *   get:
  *     summary: List all registered users
  *     tags: [Admin]
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: List of users
  */
-// GET /api/admin/users
 router.get('/', authenticateUser, requireAuth, async (req, res) => {
     try {
-        const client = await clientPromise;
-        const db = client.db();
-
-        const users = await db.collection('users').find({}).toArray();
-
-        // Map _id to id if needed, but Next.js route returned raw users from .find().toArray()
-        // which includes _id.
-        // We will return as is to match exactly.
-
+        const users = await User.findAll();
         res.json(users);
     } catch (error) {
         console.error('Error fetching users:', error);

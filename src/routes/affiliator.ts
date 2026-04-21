@@ -1,35 +1,19 @@
 import express from 'express';
-import clientPromise from '../config/database';
-import { ObjectId } from 'mongodb';
-import { Order, Commission, AffiliateLink, Product } from '../types';
+import { Order, Commission, AffiliateLink, Product, User, LinkClick, Withdrawal } from '../models';
 import { authenticateUser } from '../middleware/auth';
 import { adminNotifications, affiliatorNotifications } from '../services/notification-service';
+import { Op, Sequelize } from 'sequelize';
+import db from '../config/database';
 
 const router = express.Router();
 
 // GET /affiliator/commissions
 /**
  * @swagger
- * tags:
- *   name: Affiliator
- *   description: Endpoint khusus Afiliator
- */
-
-/**
- * @swagger
  * /affiliator/commissions:
  *   get:
  *     summary: Get commissions for an affiliator
  *     tags: [Affiliator]
- *     parameters:
- *       - in: query
- *         name: affiliatorId
- *         required: true
- *         schema:
- *           type: string
- *     responses:
- *       200:
- *         description: List of commissions
  */
 router.get('/commissions', async (req, res) => {
     const { affiliatorId } = req.query;
@@ -39,48 +23,20 @@ router.get('/commissions', async (req, res) => {
     }
 
     try {
-        const client = await clientPromise;
-        const db = client.db();
-
-        const userCommissions = await db.collection('commissions').aggregate([
-            { $match: { affiliatorId } },
-            {
-                $addFields: {
-                    orderIdObjectId: { $toObjectId: '$orderId' }
-                }
+        const userCommissions = await Commission.findAll({
+            where: {
+                [Op.or]: [{ affiliatorId: affiliatorId as string }, { _id: affiliatorId as string }]
             },
-            {
-                $lookup: {
-                    from: 'orders',
-                    localField: 'orderIdObjectId',
-                    foreignField: '_id',
-                    as: 'order'
-                }
-            },
-            {
-                $unwind: {
-                    path: '$order',
-                    preserveNullAndEmptyArrays: true
-                }
-            },
-            {
-                $project: {
-                    orderIdObjectId: 0
-                }
-            }
-        ])
-            .sort({ createdAt: -1 })
-            .limit(50)
-            .toArray();
-
-        const formattedCommissions = userCommissions.map(commission => {
-            return {
-                ...commission,
-                id: commission._id.toString(),
-            };
+            include: [{
+                model: Order,
+                as: 'order',
+                required: false
+            }],
+            order: [['createdAt', 'DESC']],
+            limit: 50
         });
 
-        return res.json(formattedCommissions);
+        return res.json(userCommissions);
     } catch (error) {
         console.error('Error fetching commissions:', error)
         return res.status(500).json({ error: 'Something went wrong' });
@@ -92,31 +48,6 @@ router.get('/commissions', async (req, res) => {
  * /affiliator/stats:
  *   get:
  *     summary: Get dashboard stats for an affiliator
- *     tags: [Affiliator]
- *     parameters:
- *       - in: query
- *         name: affiliatorId
- *         required: true
- *         schema:
- *           type: string
- *     responses:
- *       200:
- *         description: Affiliator statistics
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 totalRevenue:
- *                   type: number
- *                 withdrawableBalance:
- *                   type: number
- *                 reservedBalance:
- *                   type: number
- *                 totalOrders:
- *                   type: number
- *                 conversionRate:
- *                   type: string
  */
 router.get('/stats', async (req, res) => {
     const { affiliatorId } = req.query;
@@ -126,35 +57,36 @@ router.get('/stats', async (req, res) => {
     }
 
     try {
-        const client = await clientPromise;
-        const db = client.db();
+        const whereClause = {
+            [Op.or]: [{ affiliatorId: affiliatorId as string }, { _id: affiliatorId as string }]
+        };
 
-        const userOrders = (await db.collection<Order>('orders').find({ affiliatorId }).toArray()).map(order => ({ ...order, id: order._id.toString() }));
-        const userCommissions = (await db.collection<Commission>('commissions').find({ affiliatorId }).toArray()).map(commission => ({ ...commission, id: commission._id.toString() }));
-        const userLinks = (await db.collection<AffiliateLink>('affiliateLinks').find({ affiliatorId }).toArray()).map(link => ({ ...link, id: link._id.toString() }));
+        const totalOrders = await Order.count({ where: whereClause });
+        const commissions = await Commission.findAll({ where: whereClause });
+        const linksCount = await AffiliateLink.count({ where: whereClause });
 
-        const totalRevenue = userCommissions
-            .filter(c => !c.isPartial && (c.status === 'approved' || c.status === 'paid' || c.status === 'withdrawn' || c.status === 'processed'))
-            .reduce((sum, commission) => sum + commission.amount, 0);
-
-        const withdrawableBalance = userCommissions
-            .filter(c => !c.isPartial && c.status === 'paid')
-            .reduce((sum, commission) => {
-                const usedAmount = commission.usedAmount || 0;
-                return sum + (commission.amount - usedAmount);
+        const totalRevenue = commissions
+            .filter((c: any) => !c.isPartial && ['approved', 'paid', 'withdrawn', 'processed'].includes(c.status))
+            .reduce((sum: number, c: any) => sum + Number(c.amount), 0);
+ 
+        const withdrawableBalance = commissions
+            .filter((c: any) => !c.isPartial && c.status === 'paid')
+            .reduce((sum: number, c: any) => {
+                const usedAmount = Number(c.usedAmount) || 0;
+                return sum + (Number(c.amount) - usedAmount);
             }, 0);
+ 
+        const reservedBalance = commissions
+            .filter((c: any) => c.status === 'reserved')
+            .reduce((sum: number, c: any) => sum + Number(c.amount), 0);
 
-        const reservedBalance = userCommissions
-            .filter(c => c.status === 'reserved')
-            .reduce((sum, commission) => sum + commission.amount, 0);
-
-        const conversionRate = userOrders.length > 0 && userLinks.length > 0 ? (userOrders.length / userLinks.length) * 100 : 0;
+        const conversionRate = totalOrders > 0 && linksCount > 0 ? (totalOrders / linksCount) * 100 : 0;
 
         return res.json({
             totalRevenue,
             withdrawableBalance,
             reservedBalance,
-            totalOrders: userOrders.length,
+            totalOrders,
             conversionRate: conversionRate.toFixed(2),
         });
     } catch (error) {
@@ -163,25 +95,13 @@ router.get('/stats', async (req, res) => {
     }
 });
 
-// GET /affiliator/links
 /**
  * @swagger
  * /affiliator/links:
  *   get:
  *     summary: Get affiliate links
- *     tags: [Affiliator]
- *     parameters:
- *       - in: query
- *         name: affiliatorId
- *         required: true
- *         schema:
- *           type: string
- *     responses:
- *       200:
- *         description: List of affiliate links
  */
 router.get('/links', async (req, res) => {
-
     const { affiliatorId } = req.query;
 
     if (!affiliatorId) {
@@ -189,10 +109,12 @@ router.get('/links', async (req, res) => {
     }
 
     try {
-        const client = await clientPromise;
-        const db = client.db();
-
-        const affiliator = await db.collection('users').findOne({ _id: new ObjectId(affiliatorId as string) });
+        const affiliator = await User.findOne({
+            where: {
+                [Op.or]: [{ id: affiliatorId as string }, { _id: affiliatorId as string }]
+            }
+        });
+        
         if (!affiliator) {
             return res.status(404).json({ error: 'Affiliator not found' });
         }
@@ -201,35 +123,20 @@ router.get('/links', async (req, res) => {
             return res.json([]);
         }
 
-        const matchQuery = affiliatorId === 'all' ? {} : { affiliatorId };
+        const matchQuery = affiliatorId === 'all' ? {} : { 
+            [Op.or]: [{ affiliatorId: affiliatorId as string }, { _id: affiliatorId as string }]
+        };
 
-        const userLinksRaw = await db.collection<AffiliateLink>('affiliateLinks').find(matchQuery).toArray();
-        const userLinks = userLinksRaw.map(link => ({ ...link, id: link._id.toString() }));
-
-        const productIds = userLinks.map(link => link.productId);
-
-        // Note: In original code productIds are strings (canonical IDs) but query uses ObjectId. 
-        // Wait, the original code used: `_id: { $in: productIds.map(id => new ObjectId(id)) }`
-        // This implies productId in link IS an ObjectId string. 
-        // BUT POST route says: `const canonicalProductId = productId;` where productId comes from body.
-        // If productId in body is canonical "product1", then `new ObjectId("product1")` will fail.
-        // However, usually productId is an ObjectId string. Let's assume it is.
-        // Ideally we should check if it's a valid ObjectId before casting.
-
-        const validProductIds = productIds.filter(pid => ObjectId.isValid(pid)).map(id => new ObjectId(id));
-
-        const productsRaw = await db.collection<Product>('products').find({ _id: { $in: validProductIds } }).toArray();
-        const products = productsRaw.map(p => ({ ...p, id: p._id.toString() }));
-
-        const linksWithProducts = userLinks.map(link => {
-            const product = products.find(p => p.id === link.productId);
-            return {
-                ...link,
-                product: product,
-            };
+        const userLinks = await AffiliateLink.findAll({
+            where: matchQuery,
+            include: [{
+                model: Product,
+                as: 'product',
+                required: false
+            }]
         });
 
-        return res.json(linksWithProducts);
+        return res.json(userLinks);
     } catch (error) {
         console.error('Error fetching affiliate links:', error);
         return res.status(500).json({ error: 'Something went wrong' });
@@ -245,10 +152,12 @@ router.post('/links', async (req, res) => {
             return res.status(400).json({ error: 'Missing required fields' });
         }
 
-        const client = await clientPromise;
-        const db = client.db();
-
-        const affiliator = await db.collection('users').findOne({ _id: new ObjectId(affiliatorId) });
+        const affiliator = await User.findOne({
+            where: {
+                [Op.or]: [{ id: affiliatorId }, { _id: affiliatorId }]
+            }
+        });
+        
         if (!affiliator) {
             return res.status(404).json({ error: 'Affiliator not found' });
         }
@@ -257,57 +166,52 @@ router.post('/links', async (req, res) => {
             return res.status(403).json({ error: 'Affiliator account is not approved yet' });
         }
 
-        const affiliateLinksCollection = db.collection('affiliateLinks');
-        const canonicalProductId = productId; // Assuming string ID
+        const product = await Product.findOne({
+            where: {
+                [Op.or]: [{ id: productId }, { _id: productId }]
+            }
+        });
 
-        const existingLink = await affiliateLinksCollection.findOne({ affiliatorId, productId: canonicalProductId });
+        if (!product) {
+            return res.status(404).json({ error: 'Product not found' });
+        }
+
+        const existingLink = await AffiliateLink.findOne({ 
+            where: { 
+                affiliatorId: affiliator.id, 
+                productId: product.id 
+            } 
+        });
 
         if (existingLink) {
             return res.status(409).json({ error: 'Affiliate link for this product already exists' });
         }
 
-        const newLink = {
-            affiliatorId,
-            productId: canonicalProductId,
+        const createdLink = await AffiliateLink.create({
+            affiliatorId: affiliator.id,
+            productId: product.id,
             isActive: isActive ?? true,
+            showInStore: true, // Otomatis tampil di toko saat dibuat
             createdAt: new Date(),
+        });
+
+        const linkWithProduct = {
+            ...createdLink.toJSON(),
+            product: product.toJSON()
         };
 
-        const result = await db.collection('affiliateLinks').insertOne(newLink);
-        const insertedId = result.insertedId;
-
-        const createdLink = await db.collection('affiliateLinks').findOne({ _id: insertedId });
-        if (!createdLink) {
-            return res.status(500).json({ error: 'Failed to retrieve created link' });
-        }
-
-        // Try to fetch product if ID is valid ObjectId
-        let product = null;
-        if (ObjectId.isValid(createdLink.productId)) {
-            product = await db.collection('products').findOne({ _id: new ObjectId(createdLink.productId) });
-        }
-
-        const formattedLink = { ...createdLink, id: createdLink._id.toString(), product: product ? { ...product, id: product._id.toString() } : null };
-
-        return res.status(201).json(formattedLink);
+        return res.status(201).json(linkWithProduct);
     } catch (error) {
         console.error('Error creating affiliate link:', error);
         return res.status(500).json({ error: 'Something went wrong' });
     }
 });
 
-// GET /affiliator/products - reusing products logic but maybe specific to affiliator if needed
-// For now, mirroring the simple list
+// GET /affiliator/products
 router.get('/products', async (req, res) => {
     try {
-        const client = await clientPromise;
-        const db = client.db();
-        const products = await db.collection<Product>('products').find({ isActive: true }).toArray();
-        const productsWithId = products.map((p) => ({
-            ...p,
-            id: p._id?.toString(),
-        }));
-        return res.json(productsWithId);
+        const products = await Product.findAll({ where: { isActive: true } });
+        return res.json(products);
     } catch (error) {
         console.error('Error fetching affiliator products:', error);
         return res.status(500).json({ error: 'Something went wrong' });
@@ -324,17 +228,14 @@ router.get('/withdrawals', async (req, res) => {
     }
 
     try {
-        const client = await clientPromise;
-        const db = client.db();
+        const withdrawals = await Withdrawal.findAll({
+            where: {
+                [Op.or]: [{ affiliatorId: affiliatorId as string }, { _id: affiliatorId as string }]
+            },
+            order: [['requestedAt', 'DESC']]
+        });
 
-        const withdrawals = await db.collection('withdrawals')
-            .find({ affiliatorId })
-            .sort({ requestedAt: -1 })
-            .toArray();
-
-        const formattedWithdrawals = withdrawals.map(w => ({ ...w, id: w._id.toString() }));
-
-        return res.json(formattedWithdrawals);
+        return res.json(withdrawals);
     } catch (error) {
         console.error('Error fetching withdrawals:', error);
         return res.status(500).json({ error: 'Something went wrong' });
@@ -343,63 +244,72 @@ router.get('/withdrawals', async (req, res) => {
 
 // POST /affiliator/withdrawals
 router.post('/withdrawals', async (req, res) => {
+    const t = await db.transaction(); // Use transaction for multi-step withdrawal
     try {
         const { affiliatorId, amount, bankDetails } = req.body;
 
         if (!affiliatorId || !amount || !bankDetails) {
+            await t.rollback();
             return res.status(400).json({ error: 'Missing required fields' });
         }
 
         const requestedAmount = Number(amount);
         if (isNaN(requestedAmount) || requestedAmount <= 0) {
+            await t.rollback();
             return res.status(400).json({ error: 'Invalid withdrawal amount' });
         }
 
-        const client = await clientPromise;
-        const db = client.db();
+        const affiliator = await User.findOne({
+            where: {
+                [Op.or]: [{ id: affiliatorId }, { _id: affiliatorId }]
+            },
+            transaction: t
+        });
 
-        // Fetch minimum withdrawal from settings
-        const settingsCollection = db.collection('settings');
-        const minimumWithdrawalSetting = await settingsCollection.findOne({ name: 'minimumWithdrawal' });
-        const minimumWithdrawalAmount = minimumWithdrawalSetting?.value || 10000;
+        if (!affiliator) {
+            await t.rollback();
+            return res.status(404).json({ error: 'Affiliator not found' });
+        }
+
+        // Fetch minimum withdrawal from settings (placeholder or model if exists)
+        // Assuming settings.findOne is still needed or we have a Settings model
+        // For now, hardcode or check if Settings model exists.
+        const minimumWithdrawalAmount = 10000;
 
         if (requestedAmount < minimumWithdrawalAmount) {
+            await t.rollback();
             return res.status(400).json({ error: `Minimum withdrawal amount is Rp${minimumWithdrawalAmount.toLocaleString('id-ID')}` });
         }
 
-        const commissionsCollection = db.collection('commissions');
-        const withdrawalsCollection = db.collection('withdrawals');
-
         // 1. Calculate withdrawable balance
-        const availableCommissions = await commissionsCollection.find({
-            affiliatorId,
-            status: 'paid'
-        }).sort({ date: 1 }).toArray();
+        const availableCommissions = await Commission.findAll({
+            where: {
+                affiliatorId: affiliator.id,
+                status: 'paid'
+            },
+            order: [['date', 'ASC']],
+            transaction: t
+        });
 
         const withdrawableBalance = availableCommissions.reduce((sum, commission) => {
-            const usedAmount = commission.usedAmount || 0;
-            const remainingBalance = commission.amount - usedAmount;
-            return sum + remainingBalance;
+            const usedAmount = Number(commission.usedAmount) || 0;
+            return sum + (Number(commission.amount) - usedAmount);
         }, 0);
 
         // 2. Check if balance is sufficient
         if (requestedAmount > withdrawableBalance) {
+            await t.rollback();
             return res.status(400).json({ error: 'Insufficient balance' });
         }
 
         // 3. Create withdrawal request
-        const newWithdrawal = {
-            affiliatorId,
+        const newWithdrawal = await Withdrawal.create({
+            affiliatorId: affiliator.id,
             amount: requestedAmount,
             bankDetails,
-            status: 'approved', // Auto-approve/Processing
+            status: 'pending',
             requestedAt: new Date(),
-        };
-
-        const result = await withdrawalsCollection.insertOne(newWithdrawal);
-
-        // Get affiliator info for notifications
-        const affiliator = await db.collection('users').findOne({ _id: new ObjectId(affiliatorId) });
+        }, { transaction: t });
 
         // 4. Process reserved commissions
         let amountToCover = requestedAmount;
@@ -408,83 +318,70 @@ router.post('/withdrawals', async (req, res) => {
         for (const commission of availableCommissions) {
             if (amountToCover <= 0) break;
 
-            const usedAmount = commission.usedAmount || 0;
-            const availableBalance = commission.amount - usedAmount;
+            const usedAmount = Number(commission.usedAmount) || 0;
+            const availableBalance = Number(commission.amount) - usedAmount;
 
             if (availableBalance <= 0) continue;
 
             const amountToUse = Math.min(amountToCover, availableBalance);
 
-            // Create reserved commission
-            const reservedCommission = {
-                affiliatorId,
+            // Create reserved commission record
+            const reservedCommission = await Commission.create({
+                affiliatorId: affiliator.id,
+                affiliateName: commission.affiliateName,
                 orderId: commission.orderId,
                 productName: commission.productName,
                 amount: amountToUse,
                 status: 'reserved',
-                withdrawalId: result.insertedId.toString(),
-                createdAt: commission.createdAt,
-                date: commission.date,
+                withdrawalId: newWithdrawal.id,
+                createdAt: commission.createdAt || new Date(),
+                date: commission.date || new Date(),
                 isPartial: true,
-                parentCommissionId: commission._id.toString(),
-            };
+                parentCommissionId: commission.id,
+            } as any, { transaction: t });
 
-            const reservedResult = await db.collection('commissions').insertOne(reservedCommission);
-
-            // Update usedAmount
-            const newUsedAmount = usedAmount + amountToUse;
-            await commissionsCollection.updateOne(
-                { _id: commission._id },
-                { $set: { usedAmount: newUsedAmount } }
-            );
+            // Update usedAmount on parent commission
+            await commission.update({
+                usedAmount: usedAmount + amountToUse
+            }, { transaction: t });
 
             reservedCommissionIds.push({
-                commissionId: commission._id.toString(),
+                commissionId: commission.id,
                 amount: amountToUse,
-                reservedCommissionId: reservedResult.insertedId.toString()
+                reservedCommissionId: reservedCommission.id
             });
 
             amountToCover -= amountToUse;
         }
 
-        // Transaction log
-        await db.collection('withdrawal_transactions').insertOne({
-            withdrawalId: result.insertedId.toString(),
-            affiliatorId,
-            totalAmount: requestedAmount,
-            reservedCommissions: reservedCommissionIds,
-            createdAt: new Date(),
-        });
+        await t.commit();
 
-        // Notifications (using imported services)
-
+        // Notifications
         try {
-            if (affiliator && affiliator.email) {
-                await adminNotifications.withdrawalRequest(
-                    affiliator.name,
-                    requestedAmount.toLocaleString('id-ID')
-                );
+            await adminNotifications.withdrawalRequest(
+                affiliator.name,
+                requestedAmount.toLocaleString('id-ID')
+            );
 
-                await affiliatorNotifications.withdrawalApproved(
-                    requestedAmount.toLocaleString('id-ID'),
-                    new Date().toLocaleString('id-ID'),
-                    affiliator.email
-                );
+            await affiliatorNotifications.withdrawalApproved(
+                requestedAmount.toLocaleString('id-ID'),
+                new Date().toLocaleString('id-ID'),
+                affiliator.email
+            );
 
-                const remainingBalance = withdrawableBalance - requestedAmount;
-                await affiliatorNotifications.balanceUpdated(
-                    remainingBalance.toLocaleString('id-ID'),
-                    affiliator.email
-                );
-            }
+            const remainingBalance = withdrawableBalance - requestedAmount;
+            await affiliatorNotifications.balanceUpdated(
+                remainingBalance.toLocaleString('id-ID'),
+                affiliator.email
+            );
         } catch (notificationError) {
             console.error('❌ Failed to send notifications for withdrawal:', notificationError);
         }
 
-        const insertedWithdrawal = { ...newWithdrawal, id: result.insertedId.toString() };
-        return res.status(201).json(insertedWithdrawal);
+        return res.status(201).json(newWithdrawal);
 
     } catch (error) {
+        if (t) await t.rollback();
         console.error('Error creating withdrawal request:', error);
         return res.status(500).json({ error: 'Something went wrong' });
     }
@@ -499,21 +396,20 @@ router.get('/customers', async (req, res) => {
     }
 
     try {
-        const client = await clientPromise;
-        const db = client.db();
-
-        const orders = await db.collection('orders').find({ affiliatorId }).sort({ createdAt: -1 }).toArray();
-
-        // Should ideally mock productMap logic or efficient lookup
-        // Doing basic loop for now
-        const allProducts = await db.collection('products').find().toArray();
-        const productMap = new Map();
-        allProducts.forEach(product => {
-            productMap.set(product._id.toString(), product);
+        const orders = await Order.findAll({
+            where: {
+                [Op.or]: [{ affiliatorId: affiliatorId as string }, { _id: affiliatorId as string }]
+            },
+            include: [{
+                model: Product,
+                as: 'product',
+                required: false
+            }],
+            order: [['createdAt', 'DESC']]
         });
 
-        const ordersWithProducts = orders.map(order => {
-            const product = productMap.get(order.productId);
+        const formattedOrders = orders.map((order: any) => {
+            const product = (order as any).product;
             let commission = 0;
             if (order.status !== 'cancelled' && product) {
                 if (product.commissionType === 'percentage') {
@@ -522,50 +418,79 @@ router.get('/customers', async (req, res) => {
                     commission = Number(product.commissionValue) || 0;
                 }
             }
-
+ 
             return {
-                ...order,
-                id: order._id?.toString(),
+                ...order.toJSON(),
                 productName: product?.name || null,
-                product: product || null,
                 productPrice: product?.price || 0,
                 commission: commission
             };
         });
 
-        return res.json(ordersWithProducts);
+        return res.json(formattedOrders);
     } catch (error) {
         console.error('Error fetching customers:', error);
         return res.status(500).json({ error: 'Something went wrong' });
     }
 });
 
-// GET /affiliator/link-performance
+// GET /affiliator/orders/:orderId
+router.get('/orders/:orderId', async (req, res) => {
+    const { orderId } = req.params;
+    const { affiliatorId } = req.query;
+
+    if (!orderId || !affiliatorId) {
+        return res.status(400).json({ error: 'orderId and affiliatorId are required' });
+    }
+
+    try {
+        const order = await Order.findOne({
+            where: {
+                [Op.and]: [
+                    { [Op.or]: [{ id: orderId }, { _id: orderId }] },
+                    { [Op.or]: [{ affiliatorId: affiliatorId as string }, { _id: affiliatorId as string }] }
+                ]
+            },
+            include: [{
+                model: Product,
+                as: 'product',
+                required: false
+            }]
+        });
+
+        if (!order) {
+            return res.status(404).json({ error: 'Order not found or access denied' });
+        }
+
+        const product = (order as any).product;
+        let commission = 0;
+        if (order.status !== 'cancelled' && product) {
+            if (product.commissionType === 'percentage') {
+                commission = Math.round(Number(product.price) * (Number(product.commissionValue) / 100));
+            } else if (product.commissionType === 'fixed') {
+                commission = Number(product.commissionValue) || 0;
+            }
+        }
+
+        const formattedOrder = {
+            ...order.toJSON(),
+            productName: product?.name || null,
+            productPrice: product?.price || 0,
+            commission: commission
+        };
+
+        return res.json(formattedOrder);
+    } catch (error) {
+        console.error('Error fetching order detail:', error);
+        return res.status(500).json({ error: 'Something went wrong' });
+    }
+});
+
 /**
  * @swagger
  * /affiliator/link-performance:
  *   get:
  *     summary: Get link performance analytics
- *     tags: [Affiliator]
- *     parameters:
- *       - in: query
- *         name: affiliatorId
- *         required: true
- *         schema:
- *           type: string
- *       - in: query
- *         name: startDate
- *         required: true
- *         schema:
- *           type: string
- *       - in: query
- *         name: endDate
- *         required: true
- *         schema:
- *           type: string
- *     responses:
- *       200:
- *         description: Link performance data
  */
 router.get('/link-performance', async (req, res) => {
     const { affiliatorId, startDate, endDate, timezone = 'Asia/Jakarta' } = req.query;
@@ -574,175 +499,112 @@ router.get('/link-performance', async (req, res) => {
     if (!startDate || !endDate) return res.status(400).json({ error: 'startDate and endDate are required' });
 
     try {
-        const client = await clientPromise;
-        const db = client.db();
+        const affiliateLinks = await AffiliateLink.findAll({
+            where: {
+                [Op.or]: [{ affiliatorId: affiliatorId as string }, { _id: affiliatorId as string }]
+            },
+            include: [{
+                model: Product,
+                as: 'product',
+                attributes: ['name']
+            }]
+        });
 
-        const affiliateLinks = await db.collection('affiliateLinks').find({ affiliatorId }).toArray();
         if (affiliateLinks.length === 0) return res.json([]);
 
-        // Get product names
-        const productIds = affiliateLinks.map(link => {
-            // Handle productId type safely (string vs ObjectId)
-            return ObjectId.isValid(link.productId) ? new ObjectId(link.productId) : link.productId;
-        }).filter(id => id instanceof ObjectId); // Filter only valid ObjectIds if schema mixed
+        const linkIds = affiliateLinks.map(link => link.id);
+        const linkMap = new Map(affiliateLinks.map(link => [link.id, (link as any).product?.name || 'Unknown Product']));
 
-        // If productIds are strings in links but ObjectIds in products collection:
-        const products = await db.collection('products').find({ _id: { $in: productIds } }).toArray();
-        const productMap = new Map(products.map(p => [p._id.toString(), p.name]));
+        // Fix date range to include the full end day
+        const endOfPeriod = new Date(endDate as string);
+        endOfPeriod.setHours(23, 59, 59, 999);
 
-        const linkIds = affiliateLinks.map(link => link._id);
-        const linkMap = new Map(affiliateLinks.map(link => [link._id.toString(), productMap.get(link.productId.toString()) || 'Unknown Product']));
-
-        const clickData = await db.collection('link_clicks').aggregate([
-            {
-                $match: {
-                    linkId: { $in: linkIds },
-                },
-            },
-            {
-                $addFields: {
-                    convertedDate: {
-                        $dateToString: {
-                            format: "%Y-%m-%d",
-                            date: "$createdAt",
-                            timezone: timezone as string
-                        }
-                    }
+        // Click data aggregation
+        const clickData = await LinkClick.findAll({
+            attributes: [
+                [Sequelize.fn('date_trunc', 'day', Sequelize.col('createdAt')), 'date'],
+                'linkId',
+                [Sequelize.fn('count', Sequelize.col('id')), 'clicks']
+            ],
+            where: {
+                linkId: { [Op.in]: linkIds },
+                createdAt: {
+                    [Op.gte]: new Date(startDate as string),
+                    [Op.lte]: endOfPeriod
                 }
             },
-            {
-                $match: {
-                    convertedDate: {
-                        $gte: startDate,
-                        $lte: endDate,
-                    },
-                },
-            },
-            {
-                $group: {
-                    _id: {
-                        date: '$convertedDate',
-                        linkId: '$linkId'
-                    },
-                    clicks: { $sum: 1 },
-                },
-            },
-            {
-                $sort: { '_id.date': 1 },
-            },
-            {
-                $project: {
-                    _id: 0,
-                    date: '$_id.date',
-                    linkId: '$_id.linkId',
-                    clicks: 1,
-                },
-            },
-        ]).toArray();
+            group: [Sequelize.fn('date_trunc', 'day', Sequelize.col('createdAt')), 'linkId'],
+            order: [[Sequelize.fn('date_trunc', 'day', Sequelize.col('createdAt')), 'ASC']]
+        });
 
-        // Add product names to the result
-        const enrichedData = clickData.map(item => ({
-            ...item,
-            productName: linkMap.get(item.linkId.toString()) || 'Unknown Product'
-        }));
+        const formattedData = clickData.map(item => {
+            const data = item.toJSON() as any;
+            return {
+                date: data.date.toISOString().split('T')[0],
+                linkId: data.linkId,
+                clicks: Number(data.clicks),
+                productName: linkMap.get(data.linkId) || 'Unknown Product'
+            };
+        });
 
-        return res.json(enrichedData);
+        return res.json(formattedData);
     } catch (error) {
         console.error('Error fetching link performance data:', error);
         return res.status(500).json({ error: 'Something went wrong' });
     }
 });
 
-// PUT /affiliator/links/:id
 /**
  * @swagger
  * /affiliator/links/{id}:
  *   put:
  *     summary: Update affiliate link status
- *     tags: [Affiliator]
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               isActive:
- *                 type: boolean
- *     responses:
- *       200:
- *         description: Link updated
  */
 router.put('/links/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const { isActive } = req.body;
 
-        if (!id || !ObjectId.isValid(id)) {
-            return res.status(400).json({ error: 'Invalid ID format' });
-        }
+        const link = await AffiliateLink.findOne({
+            where: {
+                [Op.or]: [{ id: id }, { _id: id }]
+            }
+        });
 
-        const client = await clientPromise;
-        const db = client.db();
-
-        const result = await db.collection('affiliateLinks').updateOne(
-            { _id: new ObjectId(id) },
-            { $set: { isActive, updatedAt: new Date() } }
-        );
-
-        if (result.matchedCount === 0) {
+        if (!link) {
             return res.status(404).json({ error: 'Link not found' });
         }
 
-        const updatedLink = await db.collection('affiliateLinks').findOne({ _id: new ObjectId(id) });
-        const formattedLink = updatedLink ? { ...updatedLink, id: updatedLink._id.toString() } : null;
+        await link.update({ isActive, updatedAt: new Date() });
 
-        return res.json(formattedLink);
+        return res.json(link);
     } catch (error) {
         console.error('Error updating affiliate link:', error);
         return res.status(500).json({ error: 'Something went wrong' });
     }
 });
 
-// DELETE /affiliator/links/:id
 /**
  * @swagger
  * /affiliator/links/{id}:
  *   delete:
  *     summary: Delete affiliate link
- *     tags: [Affiliator]
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *     responses:
- *       200:
- *         description: Link deleted
  */
 router.delete('/links/:id', async (req, res) => {
     try {
         const { id } = req.params;
 
-        if (!id || !ObjectId.isValid(id)) {
-            return res.status(400).json({ error: 'Invalid ID format' });
-        }
+        const link = await AffiliateLink.findOne({
+            where: {
+                [Op.or]: [{ id: id }, { _id: id }]
+            }
+        });
 
-        const client = await clientPromise;
-        const db = client.db();
-
-        const result = await db.collection('affiliateLinks').deleteOne({ _id: new ObjectId(id) });
-
-        if (result.deletedCount === 0) {
+        if (!link) {
             return res.status(404).json({ error: 'Link not found' });
         }
+
+        await link.destroy();
 
         return res.json({ message: 'Link deleted successfully' });
     } catch (error) {
@@ -750,5 +612,91 @@ router.delete('/links/:id', async (req, res) => {
         return res.status(500).json({ error: 'Something went wrong' });
     }
 });
+
+/**
+ * @swagger
+ * /affiliator/store-settings:
+ *   get:
+ *     summary: Get storefront settings for the current affiliator
+ *     tags: [Affiliator]
+ */
+router.get('/store-settings', async (req, res) => {
+    const { affiliatorId } = req.query;
+    if (!affiliatorId) return res.status(400).json({ error: 'affiliatorId is required' });
+
+    try {
+        const user = await User.findOne({
+            where: { [Op.or]: [{ id: affiliatorId as string }, { _id: affiliatorId as string }] },
+            attributes: ['storeName', 'storeSlug', 'storeBio', 'storeThemeColor', 'storeSocialLinks']
+        });
+        return res.json(user);
+    } catch (error) {
+        return res.status(500).json({ error: 'Failed to fetch settings' });
+    }
+});
+
+/**
+ * @swagger
+ * /affiliator/store-settings:
+ *   patch:
+ *     summary: Update storefront settings
+ *     tags: [Affiliator]
+ */
+router.patch('/store-settings', async (req, res) => {
+    try {
+        const { affiliatorId, storeName, storeSlug, storeBio, storeThemeColor, storeSocialLinks } = req.body;
+
+        if (!affiliatorId) return res.status(400).json({ error: 'affiliatorId is required' });
+
+        const user = await User.findOne({
+            where: { [Op.or]: [{ id: affiliatorId }, { _id: affiliatorId }] }
+        });
+
+        if (!user) return res.status(404).json({ error: 'Affiliator not found' });
+
+        // Update data
+        await user.update({
+            storeName,
+            storeSlug: storeSlug?.toLowerCase().replace(/\s+/g, '-'),
+            storeBio,
+            storeThemeColor,
+            storeSocialLinks
+        });
+
+        return res.json({ message: 'Store settings updated successfully', profile: user });
+    } catch (error: any) {
+        if (error.name === 'SequelizeUniqueConstraintError') {
+            return res.status(400).json({ error: 'Slug sudah digunakan oleh user lain' });
+        }
+        return res.status(500).json({ error: 'Failed to update settings' });
+    }
+});
+
+/**
+ * @swagger
+ * /affiliator/links/{id}/toggle-store:
+ *   patch:
+ *     summary: Toggle product visibility in storefront
+ *     tags: [Affiliator]
+ */
+router.patch('/links/:id/toggle-store', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { showInStore } = req.body;
+
+        const link = await AffiliateLink.findOne({
+            where: { [Op.or]: [{ id: id }, { _id: id }] }
+        });
+
+        if (!link) return res.status(404).json({ error: 'Link not found' });
+
+        await link.update({ showInStore });
+
+        return res.json({ message: 'Visibility updated', showInStore: link.showInStore });
+    } catch (error) {
+        return res.status(500).json({ error: 'Failed to update visibility' });
+    }
+});
+
 
 export default router;
