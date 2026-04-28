@@ -27,10 +27,15 @@ router.post('/', async (req, res) => {
         const affiliateLink = await getAffiliateLinkByAffiliatorProduct(affiliator.id, product.id);
 
         if (affiliateLink) {
+            // 1. Log click for analytics
             await LinkClick.create({
                 linkId: affiliateLink.id,
                 createdAt: new Date(),
             } as any);
+
+            // 2. Increment summary counter for fast access
+            await affiliateLink.increment('clicks');
+
             return res.json({ success: true, tracked: true });
         } else {
             console.warn(`[Tracking] No affiliate link found for affiliator ${affiliator.id} and product ${product.id}`);

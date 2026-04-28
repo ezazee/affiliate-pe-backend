@@ -15,7 +15,13 @@ export interface Withdrawal {
     bankDetails: BankDetails;
     requestedAt: Date;
     processedAt?: Date;
+    transferProof?: string;
     rejectionReason?: string; // Alasan penolakan
+    activityLog?: {
+        status: WithdrawalStatus;
+        timestamp: Date;
+        note?: string;
+    }[];
     createdAt: Date;
     updatedAt: Date;
 }

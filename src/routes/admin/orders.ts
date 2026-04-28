@@ -2,6 +2,7 @@ import express from 'express';
 import { Order, Product, Commission } from '../../models';
 import { authenticateUser, requireAuth } from '../../middleware/auth';
 import { Op } from 'sequelize';
+import fetch from 'node-fetch';
 
 const router = express.Router();
 
@@ -64,9 +65,15 @@ router.put('/', authenticateUser, requireAuth, async (req, res) => {
             return res.status(400).json({ error: 'orderId and status or shippingCost are required' });
         }
 
+        const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(orderId);
+
         const order = await Order.findOne({
             where: {
-                [Op.or]: [{ id: orderId }, { _id: orderId }]
+                [Op.or]: [
+                    { orderNumber: orderId },
+                    ...(isUUID ? [{ id: orderId }] : []),
+                    { _id: orderId }
+                ]
             }
         });
 
@@ -77,6 +84,21 @@ router.put('/', authenticateUser, requireAuth, async (req, res) => {
         const updateFields: any = {};
         if (status) {
             updateFields.status = status;
+            
+            const statusNoteMap: Record<string, string> = {
+                'paid': 'Pembayaran dikonfirmasi manual oleh Admin.',
+                'shipping': 'Pesanan diproses pengiriman oleh Admin.',
+                'delivered': 'Pesanan ditandai selesai oleh Admin.',
+                'cancelled': 'Pesanan dibatalkan oleh Admin.'
+            };
+
+            const newActivity = {
+                status,
+                timestamp: new Date(),
+                note: statusNoteMap[status] || `Status diperbarui oleh Admin ke ${status}.`
+            };
+            
+            updateFields.activityLog = [...(order.activityLog || []), newActivity];
         }
         if (shippingCost !== undefined) {
             updateFields.shippingCost = shippingCost;
@@ -144,6 +166,67 @@ router.put('/', authenticateUser, requireAuth, async (req, res) => {
     } catch (error) {
         console.error('Error updating order:', error);
         res.status(500).json({ error: 'Something went wrong' });
+    }
+});
+
+/**
+ * @swagger
+ * /admin/orders/label/{orderId}:
+ *   get:
+ *     summary: Ambil label pengiriman dari Biteship
+ *     tags: [Admin]
+ */
+router.get('/label/:orderId', requireAuth, async (req, res) => {
+    try {
+        const { orderId } = req.params;
+
+        // Check if orderId is a valid UUID to avoid Postgres error
+        const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(orderId);
+
+        const order = await Order.findOne({
+            where: {
+                [Op.or]: [
+                    { orderNumber: orderId },
+                    ...(isUUID ? [{ id: orderId }] : []),
+                    { _id: orderId }
+                ]
+            }
+        });
+
+        if (!order || !order.biteshipShipmentId) {
+            return res.status(404).json({ error: 'Order atau Shipment ID tidak ditemukan' });
+        }
+
+        const gatewayUrl = process.env.PAYMENT_GATEWAY_URL;
+        const gatewayKey = process.env.PAYMENT_GATEWAY_KEY;
+
+        const response = await fetch(`${gatewayUrl}/shipping/label/${order.biteshipShipmentId}`, {
+            headers: {
+                'x-app-key': gatewayKey || ''
+            }
+        });
+
+        const data: any = await response.json();
+        console.log('📦 Biteship Label Response:', JSON.stringify(data, null, 2));
+
+        if (!response.ok) {
+            return res.status(response.status).json(data);
+        }
+
+        // Cari URL label di berbagai kemungkinan field (Biteship v1 mengembalikan di shipping_label.file_url)
+        const labelUrl = data.label_url || 
+                         data.url || 
+                         (data.shipping_label && data.shipping_label.file_url) ||
+                         (data.data && (data.data.label_url || data.data.url));
+
+        if (labelUrl) {
+            return res.json({ label_url: labelUrl });
+        }
+
+        return res.status(404).json({ error: 'URL Label tidak ditemukan dalam respon Biteship', raw: data });
+    } catch (error: any) {
+        console.error('❌ Error proxying label request:', error);
+        return res.status(500).json({ error: 'Gagal mengambil label dari gateway', details: error.message });
     }
 });
 

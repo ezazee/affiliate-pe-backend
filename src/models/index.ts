@@ -7,6 +7,8 @@ import AffiliateLink from './AffiliateLink';
 import Notification from './Notification';
 import LinkClick from './LinkClick';
 import Setting from './Setting';
+import BundleItem from './BundleItem';
+import StockLog from './StockLog';
 
 // User Associations
 User.hasMany(AffiliateLink, { foreignKey: 'affiliatorId', as: 'affiliateLinks' });
@@ -21,6 +23,7 @@ AffiliateLink.hasMany(LinkClick, { foreignKey: 'linkId', as: 'clickData' });
 
 // Product Associations
 Product.hasMany(AffiliateLink, { foreignKey: 'productId', as: 'links' });
+Product.hasMany(StockLog, { foreignKey: 'productId', as: 'stockLogs' });
 
 // Commission Associations
 Commission.belongsTo(User, { foreignKey: 'affiliatorId', as: 'affiliator' });
@@ -37,6 +40,14 @@ Order.hasMany(Commission, { foreignKey: 'orderId', as: 'commissions' });
 // LinkClick Associations
 LinkClick.belongsTo(AffiliateLink, { foreignKey: 'linkId', as: 'link' });
 
+// BundleItem Associations
+Product.hasMany(BundleItem, { foreignKey: 'bundleProductId', as: 'bundleItems' });
+BundleItem.belongsTo(Product, { foreignKey: 'bundleProductId', as: 'bundleProduct' });
+BundleItem.belongsTo(Product, { foreignKey: 'componentProductId', as: 'componentProduct' });
+
+// StockLog Associations
+StockLog.belongsTo(Product, { foreignKey: 'productId', as: 'product' });
+
 export {
     User,
     Product,
@@ -46,5 +57,7 @@ export {
     AffiliateLink,
     Notification,
     LinkClick,
-    Setting
+    Setting,
+    BundleItem,
+    StockLog
 };

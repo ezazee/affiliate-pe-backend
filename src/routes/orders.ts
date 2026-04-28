@@ -44,12 +44,15 @@ router.post('/', async (req, res) => {
             postalCode,
             orderNote,
             productId,
+            quantity,
             affiliatorId,
             affiliateCode,
             affiliateName,
             shippingCost,
             totalPrice,
             destinationAreaId,
+            destinationLat,
+            destinationLng,
             courierName,
             courierService,
         } = req.body;
@@ -87,6 +90,7 @@ router.post('/', async (req, res) => {
             province,
             postalCode,
             productId: product?.id || productId,
+            quantity: Number(quantity || 1),
             affiliatorId,
             affiliateCode,
             affiliateName,
@@ -97,9 +101,16 @@ router.post('/', async (req, res) => {
             orderNote,
             // Data kurir dari pilihan pembeli
             destinationAreaId: destinationAreaId || null,
+            destinationLat: destinationLat || null,
+            destinationLng: destinationLng || null,
             courierName: courierName || null,
             courierService: courierService || null,
             createdAt: new Date(),
+            activityLog: [{
+                status: 'pending',
+                timestamp: new Date(),
+                note: `Pesanan dibuat via jalur ${affiliateName}. Menunggu pembayaran.`
+            }]
         });
 
         // Notifications
@@ -118,7 +129,8 @@ router.post('/', async (req, res) => {
 
             if (affiliator && affiliator.email) {
                 const commissionRate = 0.1;
-                const commissionAmount = Math.round(Number(productPrice) * commissionRate);
+                const totalProdPrice = Number(productPrice) * Number(quantity || 1);
+                const commissionAmount = Math.round(totalProdPrice * commissionRate);
                 await affiliatorNotifications.newOrder(
                     orderNumber,
                     commissionAmount.toLocaleString('id-ID'),
@@ -210,6 +222,111 @@ router.get('/:orderNumber', async (req, res) => {
             }
         }
 
+        // SYNC STATUS & HISTORY FROM BITESHIP: Selalu coba sinkronkan jika ada biteshipShipmentId
+        if (order.biteshipShipmentId) {
+            try {
+                const shipment = await biteshipService.getShipmentStatus(order.biteshipShipmentId);
+                               // DEBUG: Investigasi mendalam
+                const biteshipStatus = shipment?.status || shipment?.data?.status || shipment?.data?.tracking?.status;
+                const rawHistory = shipment?.history || 
+                                   shipment?.data?.history || 
+                                   shipment?.tracking?.history ||
+                                   shipment?.data?.tracking?.history ||
+                                   shipment?.activities ||
+                                   shipment?.data?.activities ||
+                                   (shipment?.data && shipment.data.activities);
+
+                if (rawHistory && Array.isArray(rawHistory) && rawHistory.length > 0) {
+                    // Jika ketemu history asli dari Biteship, kita gunakan ini
+                    const biteshipHistory = rawHistory.map((h: any) => ({
+                        status: h.status === 'delivered' ? 'delivered' : 
+                                ['picked', 'in_transit', 'out_for_delivery', 'dropping_off'].includes(h.status) ? 'shipping' : 
+                                ['allocated', 'confirmed', 'on_the_way_to_pickup'].includes(h.status) ? 'processing' : 'pending',
+                        timestamp: new Date(h.time || h.updated_at || h.timestamp || new Date()),
+                        // PENTING: Gunakan note asli dari Biteship supaya detilnya sama persis
+                        note: h.note || h.description || `Update status: ${h.status}`
+                    }));
+
+                    // Gabungkan dengan log "Pesanan Dibuat" awal
+                    const initialLog = {
+                        status: 'pending',
+                        timestamp: order.createdAt,
+                        note: 'Pesanan telah dibuat dan terekam di sistem.'
+                    };
+
+                    let fullHistory = [initialLog];
+                    const filteredBiteshipHistory = biteshipHistory.filter((bh: any) => {
+                        const diff = Math.abs(new Date(bh.timestamp).getTime() - new Date(initialLog.timestamp).getTime());
+                        return diff > 60000;
+                    });
+
+                    fullHistory = [...fullHistory, ...filteredBiteshipHistory];
+                    fullHistory.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+                    await order.update({
+                        status: biteshipStatus === 'delivered' ? 'delivered' : 
+                                ['picked', 'in_transit', 'out_for_delivery', 'dropping_off'].includes(biteshipStatus) ? 'shipping' : order.status,
+                        biteshipTrackingStatus: biteshipStatus,
+                        trackingUrl: shipment.courier?.link || shipment.courier?.tracking_url || (shipment?.data?.courier?.link) || order.trackingUrl,
+                        activityLog: fullHistory
+                    });
+
+                    // Re-fetch order
+                    order = await Order.findByPk(order.id, {
+                        include: [
+                            { model: Product, as: 'product' },
+                            { model: User, as: 'affiliator', attributes: ['id', 'name', 'email'] }
+                        ]
+                    }) as any;
+                } else if ((order.activityLog || []).length <= 1) {
+                    // FALLBACK MANUAL: Jika tetap gagal dapet history dari Biteship
+                    const manualHistory = [
+                        {
+                            status: 'pending',
+                            timestamp: order.createdAt,
+                            note: 'Pesanan telah dibuat dan terekam di sistem.'
+                        }
+                    ];
+
+                    if (order.status !== 'pending') {
+                        manualHistory.push({
+                            status: 'paid',
+                            timestamp: new Date(new Date(order.createdAt).getTime() + 10 * 60000),
+                            note: 'Pembayaran telah dikonfirmasi.'
+                        });
+                    }
+
+                    if (['shipping', 'delivered'].includes(order.status)) {
+                        manualHistory.push({
+                            status: 'shipping',
+                            timestamp: new Date(new Date(order.createdAt).getTime() + 2 * 3600000),
+                            note: 'Pesanan sedang diproses pengiriman.'
+                        });
+                    }
+
+                    if (order.status === 'delivered') {
+                        manualHistory.push({
+                            status: 'delivered',
+                            timestamp: order.updatedAt,
+                            note: 'Pesanan telah diterima oleh pelanggan.'
+                        });
+                    }
+
+                    await order.update({ activityLog: manualHistory });
+                    
+                    // Re-fetch to show new log
+                    order = await Order.findByPk(order.id, {
+                        include: [
+                            { model: Product, as: 'product' },
+                            { model: User, as: 'affiliator', attributes: ['id', 'name', 'email'] }
+                        ]
+                    }) as any;
+                }
+            } catch (err) {
+                console.error('❌ Sync error with Biteship History:', err);
+            }
+        }
+
         return res.json(order);
     } catch (error) {
         console.error('Error fetching order:', error);
@@ -250,7 +367,23 @@ router.patch('/:orderNumber', async (req, res) => {
         if (status === 'paid') {
             await OrderService.handleOrderPaid(orderNumber);
         } else {
-            await order.update(updateData);
+            const statusNoteMap: Record<string, string> = {
+                'shipping': `Pesanan sedang dalam proses pengiriman oleh ${order.courierName || 'kurir'}.`,
+                'delivered': 'Pesanan telah diterima oleh pelanggan.',
+                'cancelled': 'Pesanan telah dibatalkan.',
+                'paid': 'Pembayaran telah dikonfirmasi.'
+            };
+
+            const newActivity = {
+                status,
+                timestamp: new Date(),
+                note: statusNoteMap[status] || `Status pesanan diperbarui ke ${status}.`
+            };
+
+            await order.update({
+                ...updateData,
+                activityLog: [...(order.activityLog || []), newActivity]
+            });
         }
 
         // Jika status adalah shipped/completed, kirim notifikasi manual

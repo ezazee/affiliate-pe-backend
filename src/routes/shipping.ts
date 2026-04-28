@@ -28,7 +28,16 @@ router.get('/areas', async (req, res) => {
  */
 router.post('/rates', async (req, res) => {
   try {
-    const { destination_area_id, productId, quantity = 1, province, city, district } = req.body;
+    const { 
+      destination_area_id, 
+      productId, 
+      quantity = 1, 
+      province, 
+      city, 
+      district,
+      destinationLat,
+      destinationLng
+    } = req.body;
 
     let finalAreaId = destination_area_id;
 
@@ -60,14 +69,19 @@ router.post('/rates', async (req, res) => {
         name: product.name,
         description: product.description || '',
         value: Number(product.price),
-        weight: product.weight || 500, // Default 500g jika belum diisi
+        weight: Number(product.weight || 100),
+        length: Number(product.length || 1),
+        width: Number(product.width || 1),
+        height: Number(product.height || 1),
         quantity: quantity
       }
     ];
 
-    const pricing = await biteshipService.getRates(finalAreaId, items);
+    const pricing = await biteshipService.getRates(finalAreaId, items, destinationLat, destinationLng);
+    
     res.json({ rates: pricing, resolvedAreaId: finalAreaId });
   } catch (error: any) {
+    console.error(`[Shipping Service] Error fetching rates:`, error.message);
     res.status(500).json({ error: error.message });
   }
 });
@@ -116,11 +130,27 @@ router.post('/webhook', async (req, res) => {
         break;
     }
 
+    // Update activity log
+    const statusNoteMap: Record<string, string> = {
+      'picked': 'Kurir sudah menjemput paket (Picked Up).',
+      'in_transit': 'Paket sedang dalam perjalanan oleh kurir.',
+      'delivered': 'Pesanan telah diterima oleh pelanggan (Delivered).',
+      'cancelled': 'Pengiriman dibatalkan.',
+      'returned': 'Paket dikembalikan ke pengirim.'
+    };
+
+    const newActivity = {
+      status: internalStatus,
+      timestamp: new Date(),
+      note: statusNoteMap[status] || `Update pengiriman dari kurir: ${status}`
+    };
+
     // Update order
     await order.update({
       status: internalStatus,
       biteshipTrackingStatus: status,
-      trackingNumber: tracking_id || order.trackingNumber
+      trackingNumber: tracking_id || order.trackingNumber,
+      activityLog: [...(order.activityLog || []), newActivity]
     });
 
     console.log(`Order ${order.orderNumber} updated via webhook to ${internalStatus} (${status})`);

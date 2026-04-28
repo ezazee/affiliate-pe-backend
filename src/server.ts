@@ -22,6 +22,7 @@ import notificationRoutes from './routes/notifications';
 import publicRoutes from './routes/public';
 import userRoutes from './routes/user';
 import webRoutes from './routes/web';
+import internalSyncRoutes from './routes/internal-sync';
 import { authenticateUser } from './middleware/auth';
 import swaggerUi from 'swagger-ui-express';
 import { specs } from './config/swagger';
@@ -43,6 +44,11 @@ app.use('/api/payment', paymentRoutes);
 
 // Global Body Parser (Hanya untuk route di bawahnya)
 app.use(express.json());
+
+app.use((req, res, next) => {
+    console.log(`📡 [${new Date().toISOString()}] ${req.method} ${req.url}`);
+    next();
+});
 
 // Use CDN for Swagger UI assets
 const swaggerOptions = {
@@ -78,6 +84,7 @@ app.use('/api/web', webRoutes);
 app.use('/api/track-click', trackingRoutes);
 app.use('/api/autocomplete-address', autocompleteRoutes);
 app.use('/api/place-details', placeDetailsRoutes);
+app.use('/api/internal', internalSyncRoutes);
 
 // --- AUTHENTICATION MIDDLEWARE ---
 // Populates req.user if token is present, but doesn't block access

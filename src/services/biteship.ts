@@ -19,6 +19,9 @@ export interface BiteshipRateItem {
     value: number;
     weight: number;
     quantity: number;
+    length?: number;
+    width?: number;
+    height?: number;
 }
 
 export const biteshipService = {
@@ -35,10 +38,12 @@ export const biteshipService = {
     /**
      * Mendapatkan tarif via Gateway
      */
-    async getRates(destinationAreaId: string, items: BiteshipRateItem[]) {
+    async getRates(destinationAreaId: string, items: BiteshipRateItem[], destinationLat?: number, destinationLng?: number) {
         const response = await gatewayClient.post('/shipping/rates', {
             destinationAreaId,
-            items
+            items,
+            destinationLat,
+            destinationLng
         });
         return response.data.rates;
     },
@@ -52,12 +57,20 @@ export const biteshipService = {
         buyerPhone: string;
         shippingAddress: string;
         destinationAreaId: string;
+        destinationLat?: number;
+        destinationLng?: number;
+        buyerPostalCode?: string;
+        buyerEmail?: string;
         courierName: string;
         courierService: string;
         productName: string;
         productPrice: number;
         productWeight: number;
+        productLength?: number;
+        productWidth?: number;
+        productHeight?: number;
         quantity?: number;
+        orderNote?: string;
     }) {
         const response = await gatewayClient.post('/shipping/create', {
             ...orderData
@@ -67,7 +80,16 @@ export const biteshipService = {
             shipmentId: response.data.shipmentId,
             trackingId: response.data.trackingId,
             waybillId: response.data.waybillId,
+            trackingUrl: response.data.trackingUrl,
             status: response.data.status,
         };
+    },
+    
+    /**
+     * Mendapatkan status pengiriman via Gateway
+     */
+    async getShipmentStatus(shipmentId: string) {
+        const response = await gatewayClient.get(`/shipping/status/${shipmentId}`);
+        return response.data;
     }
 };

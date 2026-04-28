@@ -13,10 +13,21 @@ const router = express.Router();
 const generateReferralCode = (length: number = 8): string => {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     let code = '';
-    for (const i of Array(length)) {
+    for (let i = 0; i < length; i++) {
         code += chars.charAt(Math.floor(Math.random() * chars.length));
     }
     return code;
+};
+
+// Helper to generate slug from name
+const generateSlug = (text: string): string => {
+    return text
+        .toString()
+        .toLowerCase()
+        .trim()
+        .replace(/\s+/g, '-')     // Replace spaces with -
+        .replace(/[^\w-]+/g, '')  // Remove all non-word chars
+        .replace(/--+/g, '-');    // Replace multiple - with single -
 };
 
 /**
@@ -100,10 +111,11 @@ router.post('/login', async (req, res) => {
                     console.log(`[AUTH] Migrated password for user ${email} to hash.`);
                 }
 
-                if (!user.referralCode) {
-                    const referralCode = generateReferralCode();
-                    const registrationNumber = `REG-${referralCode}`;
-                    await user.update({ referralCode, registrationNumber });
+                if (!user.referralCode || !user.storeSlug) {
+                    const referralCode = user.referralCode || generateReferralCode();
+                    const registrationNumber = user.registrationNumber || `REG-${referralCode}`;
+                    const storeSlug = user.storeSlug || `${generateSlug(user.name)}-${referralCode.substring(0, 4).toLowerCase()}`;
+                    await user.update({ referralCode, registrationNumber, storeSlug });
                 }
 
                 const token = Security.generateToken({
@@ -189,6 +201,7 @@ router.post('/register', async (req, res) => {
 
         const referralCode = generateReferralCode();
         const registrationNumber = `REG-${referralCode}`;
+        const storeSlug = `${generateSlug(name)}-${referralCode.substring(0, 4).toLowerCase()}`;
 
         // Hash Password
         const hashedPassword = await Security.hashPassword(password);
@@ -202,6 +215,7 @@ router.post('/register', async (req, res) => {
             status: 'pending',
             referralCode,
             registrationNumber,
+            storeSlug,
             createdAt: new Date(),
             updatedAt: new Date()
         });

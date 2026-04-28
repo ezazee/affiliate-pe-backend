@@ -10,8 +10,8 @@ const apiKey = process.env.BREVO_API_KEY;
 const fromEmail = process.env.EMAIL_FROM || 'support@peskinpro.id';
 const fromName = process.env.EMAIL_FROM_NAME || 'Support PE Skinpro ID';
 
-// Path logo lokal untuk dilampirkan ke email
-const LOGO_PATH = path.join(process.cwd(), '../../frontend/affiliate-pe-frontend/public/Logo.png');
+// URL logo remote
+const LOGO_URL = 'https://peskin-minio.103.85.59.38.sslip.io/peskin-affiliate/logo/logo-02-2048x2048.png';
 
 // Configure Brevo API Instance
 const apiInstance = new Brevo.TransactionalEmailsApi();
@@ -34,11 +34,7 @@ export class EmailService {
     sendSmtpEmail.sender = { "name": fromName, "email": fromEmail };
     sendSmtpEmail.to = [{ "email": to }];
 
-    // Get logo as base64 if exists
-    let logoBase64 = '';
-    if (fs.existsSync(LOGO_PATH)) {
-      logoBase64 = fs.readFileSync(LOGO_PATH).toString('base64');
-    }
+    const logoUrl = LOGO_URL;
 
     sendSmtpEmail.htmlContent = `
 <!DOCTYPE html>
@@ -61,7 +57,7 @@ export class EmailService {
           <!-- LOGO -->
           <tr>
             <td style="padding:24px 32px;">
-              ${logoBase64 ? `<img src="data:image/png;base64,${logoBase64}" alt="PE Skinpro" width="140" style="display:block;">` : '<h2 style="color:#38BDF8;margin:0;">PE Skinpro</h2>'}
+              <img src="${logoUrl}" alt="PE Skinpro" width="140" style="display:block;">
             </td>
           </tr>
 
@@ -147,7 +143,7 @@ export class EmailService {
   /**
    * Kirim Email Nomor Resi ke Pembeli (Luxurious Template)
    */
-  static async sendTrackingEmail(to: string, buyerName: string, orderNumber: string, trackingNumber: string, courierName: string): Promise<boolean> {
+  static async sendTrackingEmail(to: string, buyerName: string, orderNumber: string, trackingNumber: string, courierName: string, trackingUrl?: string): Promise<boolean> {
     if (!apiKey) {
       console.log(`[DEV] Mock sending tracking email to ${to}: ${trackingNumber}`);
       return true;
@@ -167,14 +163,7 @@ export class EmailService {
     sendSmtpEmail.sender = { "name": fromName, "email": fromEmail };
     sendSmtpEmail.to = [{ "email": to }];
 
-    // Get logo as base64 if exists
-    let logoBase64 = '';
-    if (fs.existsSync(LOGO_PATH)) {
-      logoBase64 = fs.readFileSync(LOGO_PATH).toString('base64');
-      console.log(`✅ Logo Base64 loaded: ${logoBase64.substring(0, 50)}...`);
-    } else {
-      console.warn(`⚠️ Logo not found at path: ${LOGO_PATH}`);
-    }
+    const logoUrl = LOGO_URL;
 
     sendSmtpEmail.htmlContent = `
 <!DOCTYPE html>
@@ -197,7 +186,7 @@ export class EmailService {
           <!-- HEADER / LOGO -->
           <tr>
             <td style="padding:32px;text-align:center;">
-              ${logoBase64 ? `<img src="data:image/png;base64,${logoBase64}" alt="PE Skinpro" width="160" style="display:inline-block;">` : '<h1 style="color:#38BDF8;margin:0;">PE Skinpro</h1>'}
+              <img src="${logoUrl}" alt="PE Skinpro" width="160" style="display:inline-block;">
             </td>
           </tr>
 
@@ -231,13 +220,18 @@ export class EmailService {
               <table width="100%" cellpadding="0" cellspacing="0">
                 <tr>
                   <td align="center">
-                    <a href="https://biteship.com/id/tracking/${trackingNumber}" 
+                    <a href="${trackingUrl || `${process.env.FRONTEND_URL || 'http://localhost:3000'}/payment/success?order=${orderNumber}`}" 
                        style="background-color:#0f172a;color:#ffffff;padding:16px 32px;font-size:15px;font-weight:bold;text-decoration:none;border-radius:6px;display:inline-block;">
                       Lacak Pesanan Sekarang
                     </a>
                   </td>
                 </tr>
               </table>
+              ${!trackingUrl ? `
+              <p style="font-size:13px;color:#94a3b8;text-align:center;font-style:italic;margin-top:12px;">
+                *Link pelacakan kurir akan muncul otomatis di halaman ini setelah paket dipickup.
+              </p>
+              ` : ''}
             </td>
           </tr>
 

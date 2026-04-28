@@ -1,5 +1,5 @@
 import express from 'express';
-import { Order, Commission, AffiliateLink, Product, User, LinkClick, Withdrawal } from '../models';
+import { Order, Commission, AffiliateLink, Product, User, LinkClick, Withdrawal, BundleItem } from '../models';
 import { authenticateUser } from '../middleware/auth';
 import { adminNotifications, affiliatorNotifications } from '../services/notification-service';
 import { Op, Sequelize } from 'sequelize';
@@ -7,14 +7,55 @@ import db from '../config/database';
 
 const router = express.Router();
 
+// GET /affiliator/leaderboard
+router.get('/leaderboard', async (req, res) => {
+    try {
+        const startOfMonth = new Date();
+        startOfMonth.setDate(1);
+        startOfMonth.setHours(0, 0, 0, 0);
+
+        const leaderboard = await Order.findAll({
+            attributes: [
+                'affiliatorId',
+                [Sequelize.fn('COUNT', Sequelize.col('Order.id')), 'totalOrders'],
+                [Sequelize.fn('SUM', Sequelize.col('totalPrice')), 'totalSales']
+            ],
+            where: {
+                status: { [Op.notIn]: ['cancelled'] },
+                createdAt: { [Op.gte]: startOfMonth }
+            },
+            include: [{
+                model: User,
+                as: 'affiliator',
+                attributes: ['name', 'storeName', 'storeSlug'],
+                required: true
+            }],
+            group: ['affiliatorId', 'affiliator.id'],
+            order: [[Sequelize.literal('"totalOrders"'), 'DESC']],
+            limit: 5
+        });
+
+        // Map to simpler format and hide sensitive data if needed
+        const formattedLeaderboard = leaderboard.map((item: any, index: number) => {
+            const data = item.get({ plain: true });
+            return {
+                rank: index + 1,
+                name: data.affiliator?.name || 'Anonymous',
+                storeName: data.affiliator?.storeName,
+                storeSlug: data.affiliator?.storeSlug,
+                totalOrders: parseInt(data.totalOrders),
+                totalSales: parseFloat(data.totalSales || 0)
+            };
+        });
+
+        return res.json(formattedLeaderboard);
+    } catch (error) {
+        console.error('Error fetching leaderboard:', error);
+        return res.status(500).json({ error: 'Something went wrong' });
+    }
+});
+
 // GET /affiliator/commissions
-/**
- * @swagger
- * /affiliator/commissions:
- *   get:
- *     summary: Get commissions for an affiliator
- *     tags: [Affiliator]
- */
 router.get('/commissions', async (req, res) => {
     const { affiliatorId } = req.query;
 
@@ -129,10 +170,31 @@ router.get('/links', async (req, res) => {
 
         const userLinks = await AffiliateLink.findAll({
             where: matchQuery,
+            attributes: {
+                include: [
+                    [
+                        Sequelize.literal(`(
+                            SELECT COUNT(*)
+                            FROM link_clicks AS lc
+                            WHERE lc."linkId" = "AffiliateLink".id
+                        )`),
+                        'clicks'
+                    ]
+                ]
+            },
             include: [{
                 model: Product,
                 as: 'product',
-                required: false
+                required: false,
+                include: [{
+                    model: BundleItem,
+                    as: 'bundleItems',
+                    include: [{
+                        model: Product,
+                        as: 'componentProduct',
+                        attributes: ['id', 'name', 'stock', 'isActive']
+                    }]
+                }]
             }]
         });
 
@@ -169,7 +231,16 @@ router.post('/links', async (req, res) => {
         const product = await Product.findOne({
             where: {
                 [Op.or]: [{ id: productId }, { _id: productId }]
-            }
+            },
+            include: [{
+                model: BundleItem,
+                as: 'bundleItems',
+                include: [{
+                    model: Product,
+                    as: 'componentProduct',
+                    attributes: ['id', 'name', 'stock', 'isActive']
+                }]
+            }]
         });
 
         if (!product) {
@@ -210,7 +281,18 @@ router.post('/links', async (req, res) => {
 // GET /affiliator/products
 router.get('/products', async (req, res) => {
     try {
-        const products = await Product.findAll({ where: { isActive: true } });
+        const products = await Product.findAll({ 
+            where: { isActive: true },
+            include: [{
+                model: BundleItem,
+                as: 'bundleItems',
+                include: [{
+                    model: Product,
+                    as: 'componentProduct',
+                    attributes: ['id', 'name', 'stock', 'isActive']
+                }]
+            }]
+        });
         return res.json(products);
     } catch (error) {
         console.error('Error fetching affiliator products:', error);
@@ -309,6 +391,11 @@ router.post('/withdrawals', async (req, res) => {
             bankDetails,
             status: 'pending',
             requestedAt: new Date(),
+            activityLog: [{
+                status: 'pending',
+                timestamp: new Date(),
+                note: 'Permintaan penarikan dana diajukan oleh affiliator'
+            }]
         }, { transaction: t });
 
         // 4. Process reserved commissions
@@ -419,8 +506,11 @@ router.get('/customers', async (req, res) => {
                 }
             }
  
+            const orderJson = order.toJSON();
+            delete orderJson.trackingUrl;
+ 
             return {
-                ...order.toJSON(),
+                ...orderJson,
                 productName: product?.name || null,
                 productPrice: product?.price || 0,
                 commission: commission
@@ -472,8 +562,11 @@ router.get('/orders/:orderId', async (req, res) => {
             }
         }
 
+        const orderJson = order.toJSON();
+        delete orderJson.trackingUrl;
+
         const formattedOrder = {
-            ...order.toJSON(),
+            ...orderJson,
             productName: product?.name || null,
             productPrice: product?.price || 0,
             commission: commission
@@ -493,10 +586,14 @@ router.get('/orders/:orderId', async (req, res) => {
  *     summary: Get link performance analytics
  */
 router.get('/link-performance', async (req, res) => {
-    const { affiliatorId, startDate, endDate, timezone = 'Asia/Jakarta' } = req.query;
+    const { affiliatorId, startDate, endDate, groupBy = 'day' } = req.query;
 
     if (!affiliatorId) return res.status(400).json({ error: 'affiliatorId is required' });
     if (!startDate || !endDate) return res.status(400).json({ error: 'startDate and endDate are required' });
+
+    // Validate groupBy
+    const validGroupings = ['day', 'week', 'month'];
+    const grouping = validGroupings.includes(groupBy as string) ? groupBy as string : 'day';
 
     try {
         const affiliateLinks = await AffiliateLink.findAll({
@@ -522,7 +619,7 @@ router.get('/link-performance', async (req, res) => {
         // Click data aggregation
         const clickData = await LinkClick.findAll({
             attributes: [
-                [Sequelize.fn('date_trunc', 'day', Sequelize.col('createdAt')), 'date'],
+                [Sequelize.fn('date_trunc', grouping, Sequelize.col('createdAt')), 'date'],
                 'linkId',
                 [Sequelize.fn('count', Sequelize.col('id')), 'clicks']
             ],
@@ -533,8 +630,8 @@ router.get('/link-performance', async (req, res) => {
                     [Op.lte]: endOfPeriod
                 }
             },
-            group: [Sequelize.fn('date_trunc', 'day', Sequelize.col('createdAt')), 'linkId'],
-            order: [[Sequelize.fn('date_trunc', 'day', Sequelize.col('createdAt')), 'ASC']]
+            group: [Sequelize.fn('date_trunc', grouping, Sequelize.col('createdAt')), 'linkId'],
+            order: [[Sequelize.fn('date_trunc', grouping, Sequelize.col('createdAt')), 'ASC']]
         });
 
         const formattedData = clickData.map(item => {

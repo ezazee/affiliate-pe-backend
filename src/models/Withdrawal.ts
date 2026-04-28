@@ -13,7 +13,9 @@ class Withdrawal extends Model<WithdrawalAttributes, WithdrawalCreationAttribute
     public bankDetails!: BankDetails;
     public requestedAt!: Date;
     public processedAt?: Date;
+    public transferProof?: string;
     public rejectionReason?: string;
+    public activityLog?: any[];
     public readonly createdAt!: Date;
     public readonly updatedAt!: Date;
 }
@@ -56,6 +58,15 @@ Withdrawal.init(
         rejectionReason: {
             type: DataTypes.TEXT,
             allowNull: true,
+        },
+        transferProof: {
+            type: DataTypes.STRING,
+            allowNull: true,
+        },
+        activityLog: {
+            type: DataTypes.JSONB,
+            allowNull: true,
+            defaultValue: [],
         },
         createdAt: {
             type: DataTypes.DATE,

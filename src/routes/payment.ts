@@ -44,11 +44,26 @@ router.post('/doku/notify', verifyInternalWebhook, async (req, res) => {
           case 'returned':   internalStatus = 'cancelled'; break;
         }
 
+        const statusNoteMap: Record<string, string> = {
+          'picked': 'Kurir sudah menjemput paket (Picked Up).',
+          'in_transit': 'Paket sedang dalam perjalanan oleh kurir.',
+          'delivered': 'Pesanan telah diterima oleh pelanggan (Delivered).',
+          'cancelled': 'Pengiriman dibatalkan.',
+          'returned': 'Paket dikembalikan ke pengirim.'
+        };
+
+        const newActivity = {
+          status: internalStatus,
+          timestamp: new Date(),
+          note: statusNoteMap[status] || `Update pengiriman otomatis: ${status}`
+        };
+
         await order.update({
           status: internalStatus,
           biteshipTrackingStatus: status,
           trackingNumber: trackingId || order.trackingNumber,
-          biteshipShipmentId: shipmentId || order.biteshipShipmentId
+          biteshipShipmentId: shipmentId || order.biteshipShipmentId,
+          activityLog: [...(order.activityLog || []), newActivity]
         });
         console.log(`🚚 [Shipping Update] Order ${invoiceNumber} updated to ${internalStatus} (${status})`);
       }
@@ -57,7 +72,9 @@ router.post('/doku/notify', verifyInternalWebhook, async (req, res) => {
 
     return res.status(200).json({ message: 'Event ignored' });
   } catch (error: any) {
-    console.error('❌ Gagal memproses callback gateway:', error.message);
+    console.error(`\n🚨 [AFFILIATE BACKEND - DOKU WEBHOOK ERROR]`);
+    console.error(`Invoice: ${invoiceNumber}`);
+    console.error(`Penyebab: ${error.message}\n`);
     return res.status(500).json({ error: 'Internal Server Error' });
   }
 });

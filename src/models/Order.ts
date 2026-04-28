@@ -20,14 +20,18 @@ class Order extends Model<OrderAttributes, OrderCreationAttributes> implements O
     public province!: string;
     public postalCode!: string;
     public productId!: string;
+    public quantity!: number;
     public affiliatorId!: string;
     public affiliateCode!: string;
     public affiliateName!: string;
     public status!: OrderStatus;
     public destinationAreaId?: string;
+    public destinationLat?: number;
+    public destinationLng?: number;
     public courierName?: string;
     public courierService?: string;
     public trackingNumber?: string;
+    public trackingUrl?: string;
     public biteshipShipmentId?: string;
     public biteshipTrackingStatus?: string;
     public shippingCost?: number;
@@ -42,6 +46,7 @@ class Order extends Model<OrderAttributes, OrderCreationAttributes> implements O
     public productPrice?: number;
     public commissionType?: string;
     public commissionValue?: number;
+    public activityLog?: any[];
 }
 
 Order.init(
@@ -109,6 +114,11 @@ Order.init(
             type: DataTypes.UUID,
             allowNull: true,
         },
+        quantity: {
+            type: DataTypes.INTEGER,
+            allowNull: false,
+            defaultValue: 1,
+        },
         affiliatorId: {
             type: DataTypes.UUID,
             allowNull: false,
@@ -129,6 +139,14 @@ Order.init(
             type: DataTypes.STRING,
             allowNull: true,
         },
+        destinationLat: {
+            type: DataTypes.DECIMAL(10, 8),
+            allowNull: true,
+        },
+        destinationLng: {
+            type: DataTypes.DECIMAL(11, 8),
+            allowNull: true,
+        },
         courierName: {
             type: DataTypes.STRING,
             allowNull: true,
@@ -139,6 +157,10 @@ Order.init(
         },
         trackingNumber: {
             type: DataTypes.STRING,
+            allowNull: true,
+        },
+        trackingUrl: {
+            type: DataTypes.TEXT,
             allowNull: true,
         },
         biteshipShipmentId: {
@@ -196,6 +218,11 @@ Order.init(
         updatedAt: {
             type: DataTypes.DATE,
             allowNull: false,
+        },
+        activityLog: {
+            type: DataTypes.JSONB,
+            allowNull: true,
+            defaultValue: [],
         },
     },
     {

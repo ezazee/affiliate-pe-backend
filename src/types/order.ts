@@ -18,14 +18,18 @@ export interface Order {
     province: string;
     postalCode: string;
     productId: string;
+    quantity: number;
     affiliatorId: string;
     affiliateCode: string;
     affiliateName: string;
     status: OrderStatus;
     destinationAreaId?: string;
+    destinationLat?: number;
+    destinationLng?: number;
     courierName?: string;
     courierService?: string;
     trackingNumber?: string;
+    trackingUrl?: string;
     biteshipShipmentId?: string;
     biteshipTrackingStatus?: string;
     shippingCost?: number;
@@ -41,4 +45,9 @@ export interface Order {
     productPrice?: number;
     commissionType?: string;
     commissionValue?: number;
+    activityLog?: {
+        status: string;
+        timestamp: Date;
+        note: string;
+    }[];
 }

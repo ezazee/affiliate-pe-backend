@@ -14,7 +14,7 @@ const router = express.Router();
  *     summary: List all withdrawal requests
  *     tags: [Admin]
  */
-router.get('/', authenticateUser, requireAuth, async (req, res) => {
+router.get('/', async (req, res) => {
     try {
         const withdrawals = await Withdrawal.findAll({
             order: [['requestedAt', 'DESC']]
@@ -29,26 +29,61 @@ router.get('/', authenticateUser, requireAuth, async (req, res) => {
 /**
  * @swagger
  * /admin/withdrawals/{id}:
+ *   get:
+ *     summary: Get withdrawal details
+ *     tags: [Admin]
+ */
+router.get('/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+        
+        const withdrawal = await Withdrawal.findOne({
+            where: isUUID ? { id } : { _id: id },
+            include: [{
+                model: User,
+                as: 'affiliator',
+                attributes: ['id', 'name', 'email', 'phone', 'storeName']
+            }]
+        });
+
+        if (!withdrawal) {
+            return res.status(404).json({ error: 'Data penarikan tidak ditemukan di database' });
+        }
+        res.json(withdrawal);
+    } catch (error) {
+        console.error('Error fetching withdrawal:', error);
+        res.status(500).json({ error: `Server Error: ${error instanceof Error ? error.message : 'Unknown'}` });
+    }
+});
+
+/**
+ * @swagger
+ * /admin/withdrawals/{id}:
  *   put:
  *     summary: Approve or reject withdrawal
  *     tags: [Admin]
  */
-router.put('/:id', authenticateUser, requireAuth, async (req, res) => {
+router.put('/:id', async (req, res) => {
     const t = await db.transaction();
     try {
         const { id } = req.params;
-        const { status, rejectionReason } = req.body;
+        const { status, rejectionReason, transferProof } = req.body;
+        const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
 
         if (!status) {
             await t.rollback();
             return res.status(400).json({ error: 'status is required' });
         }
 
+        if (status === 'completed' && !transferProof) {
+            await t.rollback();
+            return res.status(400).json({ error: 'Bukti transfer wajib diunggah untuk status Dana Cair' });
+        }
+
         // Get withdrawal details
         const withdrawal = await Withdrawal.findOne({
-            where: {
-                [Op.or]: [{ id }, { _id: id }]
-            },
+            where: isUUID ? { id } : { _id: id },
             transaction: t
         });
 
@@ -65,11 +100,24 @@ router.put('/:id', authenticateUser, requireAuth, async (req, res) => {
             transaction: t
         });
 
+        const newActivity = {
+            status,
+            timestamp: new Date(),
+            note: status === 'approved' ? 'Permintaan disetujui, dana sedang diproses' :
+                  status === 'completed' ? 'Dana berhasil dicairkan dan ditransfer' :
+                  status === 'rejected' ? `Penarikan ditolak: ${rejectionReason || 'Tanpa alasan'}` :
+                  'Status diperbarui'
+        };
+
+        const updatedActivityLog = [...(withdrawal.activityLog || []), newActivity];
+
         await withdrawal.update({
             status,
             processedAt: new Date(),
             updatedAt: new Date(),
-            ...(status === 'rejected' && rejectionReason && { rejectionReason })
+            activityLog: updatedActivityLog,
+            ...(status === 'rejected' && rejectionReason && { rejectionReason }),
+            ...(status === 'completed' && transferProof && { transferProof })
         }, { transaction: t });
 
         // Handle commission status based on withdrawal status

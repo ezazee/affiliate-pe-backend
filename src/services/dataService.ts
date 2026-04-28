@@ -1,9 +1,22 @@
-import { Product, User, AffiliateLink } from '../models';
+import { Product, User, AffiliateLink, BundleItem } from '../models';
 import { Op } from 'sequelize';
 
 export const getProductBySlug = async (slugOrId: string): Promise<Product | null> => {
+    const include = [{
+        model: BundleItem,
+        as: 'bundleItems',
+        include: [{
+            model: Product,
+            as: 'componentProduct',
+            attributes: ['id', 'name', 'stock', 'isActive']
+        }]
+    }];
+
     // Try by slug first
-    let product = await Product.findOne({ where: { slug: slugOrId } });
+    let product = await Product.findOne({ 
+        where: { slug: slugOrId },
+        include
+    });
     
     // Fallback to ID/UUID if not found by slug
     if (!product && slugOrId) {
@@ -15,7 +28,8 @@ export const getProductBySlug = async (slugOrId: string): Promise<Product | null
             product = await Product.findOne({
                 where: {
                     [Op.or]: [{ id: slugOrId }, { _id: slugOrId }]
-                }
+                },
+                include
             });
         }
     }

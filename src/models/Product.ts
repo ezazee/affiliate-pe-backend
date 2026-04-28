@@ -7,6 +7,7 @@ interface ProductCreationAttributes extends Optional<ProductAttributes, 'id' | '
 class Product extends Model<ProductAttributes, ProductCreationAttributes> implements ProductAttributes {
     public _id!: any;
     public id!: string;
+    public sku!: string;
     public name!: string;
     public slug!: string;
     public price!: number;
@@ -15,6 +16,11 @@ class Product extends Model<ProductAttributes, ProductCreationAttributes> implem
     public commissionType!: CommissionType;
     public commissionValue!: number;
     public weight!: number;
+    public length!: number;
+    public width!: number;
+    public height!: number;
+    public type!: 'single' | 'bundle';
+    public stock!: number;
     public isActive!: boolean;
     public readonly createdAt!: Date;
     public readonly updatedAt!: Date;
@@ -30,6 +36,11 @@ Product.init(
         _id: {
             type: DataTypes.STRING,
             allowNull: true,
+        },
+        sku: {
+            type: DataTypes.STRING,
+            allowNull: true,
+            unique: true,
         },
         name: {
             type: DataTypes.STRING,
@@ -63,7 +74,32 @@ Product.init(
         weight: {
             type: DataTypes.INTEGER,
             allowNull: false,
-            defaultValue: 500,
+            defaultValue: 100,
+        },
+        length: {
+            type: DataTypes.INTEGER,
+            allowNull: false,
+            defaultValue: 1,
+        },
+        width: {
+            type: DataTypes.INTEGER,
+            allowNull: false,
+            defaultValue: 1,
+        },
+        height: {
+            type: DataTypes.INTEGER,
+            allowNull: false,
+            defaultValue: 1,
+        },
+        type: {
+            type: DataTypes.STRING(50),
+            allowNull: false,
+            defaultValue: 'single',
+        },
+        stock: {
+            type: DataTypes.INTEGER,
+            allowNull: false,
+            defaultValue: 0,
         },
         isActive: {
             type: DataTypes.BOOLEAN,

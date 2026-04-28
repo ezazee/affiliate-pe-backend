@@ -1,5 +1,5 @@
 import express from 'express';
-import { User, AffiliateLink, Order, Commission } from '../../models';
+import { User, AffiliateLink, Order, Commission, Product } from '../../models';
 
 const router = express.Router();
 
@@ -23,7 +23,13 @@ router.get('/', async (req, res) => {
                 },
                 {
                     model: Order,
-                    as: 'orders'
+                    as: 'orders',
+                    include: [
+                        {
+                            model: Product,
+                            as: 'product'
+                        }
+                    ]
                 },
                 {
                     model: Commission,
@@ -40,18 +46,18 @@ router.get('/', async (req, res) => {
             const commissions = (affiliator.commissions || []) as any[];
 
             const totalOrders = orders.length;
-            const paidOrders = orders.filter(o => o.status === 'paid' || o.status === 'completed').length;
+            const paidOrders = orders.filter(o => ['paid', 'completed', 'shipping', 'delivered'].includes(o.status)).length;
             const totalRevenue = orders
-                .filter(o => o.status === 'paid' || o.status === 'completed')
+                .filter(o => ['paid', 'completed', 'shipping', 'delivered'].includes(o.status))
                 .reduce((sum, o) => sum + (Number(o.totalPrice) || 0), 0);
 
             // Calculate commissions
             const totalCommission = commissions
-                .filter(c => ['approved', 'paid', 'withdrawn', 'processed'].includes(c.status))
+                .filter(c => !c.isPartial && ['approved', 'paid', 'withdrawn', 'processed'].includes(c.status))
                 .reduce((sum, c) => sum + (Number(c.amount) || 0), 0);
 
             const paidCommission = commissions
-                .filter(c => c.status === 'paid' || c.status === 'withdrawn')
+                .filter(c => !c.isPartial && (c.status === 'paid' || c.status === 'withdrawn'))
                 .reduce((sum, c) => sum + (Number(c.amount) || 0), 0);
 
             const withdrawableCommission = commissions
@@ -76,6 +82,22 @@ router.get('/', async (req, res) => {
             };
         });
 
+        // Calculate Top Products
+        const productCounts: Record<string, number> = {};
+        affiliators.forEach(user => {
+            const orders = ((user.toJSON() as any).orders || []) as any[];
+            orders.forEach(o => {
+                if (['paid', 'completed', 'shipping', 'delivered'].includes(o.status)) {
+                    const productName = o.product?.name || o.productName || 'Unknown Product';
+                    productCounts[productName] = (productCounts[productName] || 0) + 1;
+                }
+            });
+        });
+
+        const topProducts = Object.entries(productCounts)
+            .map(([name, count]) => ({ name, value: count }))
+            .sort((a, b) => b.value - a.value);
+
         // Overall stats
         const overallStats = {
             totalAffiliators: affiliatorStats.length,
@@ -89,6 +111,7 @@ router.get('/', async (req, res) => {
 
         res.json({
             overallStats,
+            topProducts,
             affiliators: affiliatorStats
         });
 

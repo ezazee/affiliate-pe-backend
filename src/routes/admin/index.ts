@@ -6,6 +6,7 @@ import commissionRoutes from './commissions';
 import withdrawalRoutes from './withdrawals';
 import orderRoutes from './orders';
 import userRoutes from './users';
+import inventoryRoutes from './inventory';
 
 import settingsRoutes from './settings';
 import landingSettingsRoutes from './landing-settings';
@@ -25,6 +26,7 @@ router.use('/commissions', commissionRoutes);
 router.use('/withdrawals', withdrawalRoutes);
 router.use('/orders', orderRoutes);
 router.use('/users', userRoutes);
+router.use('/inventory', inventoryRoutes);
 router.use('/settings', settingsRoutes);
 router.use('/landing-settings', landingSettingsRoutes);
 router.use('/affiliators', affiliatorRoutes);
